@@ -229,7 +229,7 @@ end
 
 ------------------------------------------------------------------------
 -- entries
--- e = {n=name, f=full name, g=guild, d=desc, a=author, t=created, m=modified,
+-- e = {n=name, f=full name, g=guild, c=class, d=desc, a=author, t=created, m=modified,
 --      s=score, v={[voter]=1|-1}, x=deleted-at}
 ------------------------------------------------------------------------
 function NS.DB() return db end
@@ -248,9 +248,14 @@ function NS.ValidId(id) return type(id) == "string" and #id <= 12 and id:match("
 
 -- canEdit: may this change an existing entry? (admin edits, or a sync reply)
 -- ed: who last edited it
-function NS.ApplyEntry(id, t, m, n, g, a, d, f, canEdit, ed)
+-- canFillClass: a live announcement from the author can fill a missing class
+function NS.ApplyEntry(id, t, m, n, g, a, d, f, canEdit, ed, class, canFillClass)
   t, m = tonumber(t) or 0, tonumber(m) or 0
   ed = ed and NS.Clean(ed, 60) or ""
+  if (issecretvalue and issecretvalue(class)) or type(class) ~= "string"
+     or not (RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]) then
+    class = nil
+  end
   if not NS.ValidId(id) then return false end
   -- everything from the network is cleaned and length-capped before it is stored or shown
   n, g, a, f = NS.Clean(n, 60), NS.Clean(g, 40), NS.Clean(a, 60), NS.Clean(f, 40)
@@ -261,15 +266,24 @@ function NS.ApplyEntry(id, t, m, n, g, a, d, f, canEdit, ed)
   local e = db.e[id]
   if e then
     if e.x then return false end -- deleted stays deleted
-    if not canEdit or m <= (e.m or 0) then return false end
-    local same = e.n == n and e.d == d and (e.g or "") == g and (e.f or "") == f
+    if not canEdit or m <= (e.m or 0) then
+      -- A sync reply may predate a local edit or vote. Keep that newer data.
+      if class and not e.c and (canEdit or canFillClass) then
+        e.c = class
+        changed(); return true
+      end
+      return false
+    end
+    class = class or e.c -- older clients and ordinary edits omit the class
+    local same = e.n == n and e.d == d and (e.g or "") == g and (e.f or "") == f and e.c == class
     e.n, e.d, e.g, e.f = n, d, g ~= "" and g or nil, f ~= "" and f or nil
+    e.c = class
     if ed ~= "" then e.ed = ed end
     e.m = m
     if same then bump(m); return false end
   else
     db.e[id] = {n = n, f = (f ~= "" and f) or nil, g = (g ~= "" and g) or nil, d = d,
-                a = a ~= "" and a or "?", t = t, m = m, s = 0, ed = ed ~= "" and ed or nil}
+                a = a ~= "" and a or "?", t = t, m = m, s = 0, ed = ed ~= "" and ed or nil, c = class}
   end
   bump(m); changed(); return true
 end
@@ -302,7 +316,7 @@ function NS.ApplyDelete(id, x)
 end
 
 -- local actions ---------------------------------------------------------
-function NS.Add(name, realm, guild, desc, full, manual)
+function NS.Add(name, realm, guild, desc, full, manual, class)
   if manual and not NS.CanDelete() then return end
   if not NS.InDog() then print("|cff" .. NS.GOLD .. "Book of Dogs|r: only members of <Dog> can add entries."); return end
   local n = NS.Key(name, realm)
@@ -319,7 +333,7 @@ function NS.Add(name, realm, guild, desc, full, manual)
   local id, t = NS.NewId(), now()
   full = full and full ~= name and NS.Clean(full, 40) or ""
   guild = NS.Clean(guild or "", 40)
-  NS.ApplyEntry(id, t, t, n, guild, NS.Display(NS.MyId()), desc, full)
+  NS.ApplyEntry(id, t, t, n, guild, NS.Display(NS.MyId()), desc, full, nil, nil, class)
   NS.SendEntry(id)
   -- announce in guild chat (this runs from the popup's button click)
   local who = full ~= "" and full or n

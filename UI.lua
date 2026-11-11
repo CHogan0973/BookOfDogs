@@ -38,7 +38,10 @@ local function refresh()
       if s > 0 then r.score:SetTextColor(0.3, 1, 0.3) elseif s < 0 then r.score:SetTextColor(1, 0.4, 0.4) else r.score:SetTextColor(0.8, 0.8, 0.8) end
       local mine = e.v and e.v[me]
       setVoted(r.up, mine == 1); setVoted(r.down, mine == -1)
-      r.name:SetText((e.f or e.n) .. (e.g and ("  |cff40c040<" .. e.g .. ">|r") or ""))
+      local name = e.f or e.n
+      local color = e.c and RAID_CLASS_COLORS and RAID_CLASS_COLORS[e.c]
+      if color and color.colorStr then name = "|c" .. color.colorStr .. name .. "|r" end
+      r.name:SetText(name .. (e.g and ("  |cff40c040<" .. e.g .. ">|r") or ""))
       r.desc:SetText(e.d or "")
       r.by:SetText(("added by %s  ·  %s%s"):format(NS.Display(e.a or "?"), ago(e.t), e.ed and ("  ·  edited by " .. NS.Display(e.ed)) or ""))
       r.del:SetShown(canDel); r.edit:SetShown(canDel)

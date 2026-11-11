@@ -76,7 +76,7 @@ end
 
 local function esc(s) return (tostring(s or ""):gsub(SEP, " ")) end
 local function entryMsg(id, e)
-  return table.concat({"A", id, e.t or 0, e.m or 0, esc(e.n), esc(e.g), esc(e.a), esc(e.d), esc(e.f), esc(e.ed)}, SEP)
+  return table.concat({"A", id, e.t or 0, e.m or 0, esc(e.n), esc(e.g), esc(e.a), esc(e.d), esc(e.f), esc(e.ed), esc(e.c)}, SEP)
 end
 function NS.SendEntry(id)
   local e = NS.DB().e[id]; if e and not e.x then NS.Send(entryMsg(id, e)) end
@@ -102,12 +102,25 @@ local function digest()
 end
 NS.Digest = digest
 
+-- Class backfills can leave modification times unchanged. Compare a separate
+-- fingerprint so the entry digest still matches on older clients.
+local function classDigest()
+  local classes = {}
+  for id, e in pairs(NS.DB().e) do
+    if not e.x and e.c then classes[#classes + 1] = id .. ":" .. e.c end
+  end
+  table.sort(classes)
+  local data, hash = table.concat(classes, ","), 0
+  for i = 1, #data do hash = (hash * 31 + data:byte(i)) % 2147483647 end
+  return tostring(hash)
+end
+
 -- followup: "1" asks the other side to compare back (only for the first round)
 local function myVersion()
   return (C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata)(ADDON, "Version") or "0"
 end
 local function hello(since, followup)
-  NS.Send(table.concat({"H", since, digest(), followup and "1" or "0", myVersion()}, SEP))
+  NS.Send(table.concat({"H", since, digest(), followup and "1" or "0", myVersion(), classDigest()}, SEP))
 end
 function NS.RequestSync(full)
   -- replies to our own request are trusted for 10 minutes (vote lists, deletes, editors)
@@ -147,15 +160,20 @@ local function inReply(sender)
   if NS.inReplyFrom == sender and GetTime() < (NS.inReplyUntil or 0) then return true end
   return NS.askedAt ~= nil and GetTime() - NS.askedAt < 600
 end
-handlers.A = function(sender, id, t, m, n, g, a, d, f, ed)
-  if not inReply(sender) then
+handlers.A = function(sender, id, t, m, n, g, a, d, f, ed, class)
+  local canEdit, canFillClass = inReply(sender), false
+  if not canEdit then
     local now, r = GetTime(), recent[sender] or {}
     local keep = {} for _, ts in ipairs(r) do if now - ts < 60 then keep[#keep + 1] = ts end end
     if #keep >= 6 then return end
     keep[#keep + 1] = now; recent[sender] = keep
     a = NS.senderDisplay or sender
+    -- Guild chat can create the entry before the queued addon message arrives.
+    local e = NS.DB().e[id]
+    canFillClass = e and NS.Id(e.a) == sender and e.t == tonumber(t)
+                   and (e.n == NS.Clean(n, 60) or e.n == NS.Clean(f, 40))
   end
-  NS.ApplyEntry(id, t, m, n, g, a, d, f, inReply(sender), ed)
+  NS.ApplyEntry(id, t, m, n, g, a, d, f, canEdit, ed, class, canFillClass)
 end
 -- editor granted/removed: only the main admin can do this
 handlers.G = function(sender, name, v, m)
@@ -207,12 +225,13 @@ local function checkVersion(v)
   end
 end
 
-handlers.H = function(sender, since, theirDigest, followup, ver)
+handlers.H = function(sender, since, theirDigest, followup, ver, theirClassDigest)
   checkVersion(ver)
   since = tonumber(since) or 0
   if pendingReply[sender] then return end
   local follow = followup == "1"
-  if theirDigest and theirDigest ~= "" and theirDigest ~= digest() then
+  if (theirDigest and theirDigest ~= "" and theirDigest ~= digest())
+     or (theirClassDigest and theirClassDigest ~= "" and theirClassDigest ~= classDigest()) then
     since = 0 -- our books differ somewhere: send everything, then compare back
   elseif (NS.DB().maxM or 0) <= since then
     return -- nothing they don't have

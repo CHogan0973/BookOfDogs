@@ -1,21 +1,40 @@
 -- Book of Dogs: "Add to Book of Dogs" on player right-click menus, and the description popup.
 local ADDON, NS = ...
 
--- find a unit token for a player name (target, mouseover, party, raid)
-local function unitFor(name)
-  local function is(u) return UnitExists(u) and UnitIsPlayer(u) and NS.Key(UnitName(u)) == name end
-  for _, u in ipairs({"target", "mouseover", "focus"}) do if is(u) then return u end end
-  if IsInRaid() then for i = 1, 40 do if is("raid" .. i) then return "raid" .. i end end
-  else for i = 1, 4 do if is("party" .. i) then return "party" .. i end end end
+local function secret(value)
+  return issecretvalue and issecretvalue(value)
 end
 
 local function fullName(unit, short)
   if not (unit and C_TooltipInfo and C_TooltipInfo.GetUnit) then return nil end
   local ok, data = pcall(C_TooltipInfo.GetUnit, unit)
   local line = ok and data and data.lines and data.lines[1] and data.lines[1].leftText
-  if type(line) ~= "string" or (issecretvalue and issecretvalue(line)) then return nil end
+  if type(line) ~= "string" or secret(line) then return nil end
   line = NS.Clean(line, 40)
   if line ~= short and line:find(short, 1, true) then return line end
+end
+
+local function matchesPlayer(unit, key)
+  if not UnitExists(unit) or not UnitIsPlayer(unit) then return false end
+  local name, realm = UnitName(unit)
+  if secret(name) or secret(realm) or not name then return false end
+  if NS.Key(name, realm) == key then return true end
+  local full = fullName(unit, name)
+  return full ~= nil and NS.Key(full, realm) == key
+end
+
+-- A first name alone cannot identify a Forever character without a unit token.
+local function unitFor(key)
+  if not key:find(" ", 1, true) then return end
+  for _, unit in ipairs({"target", "mouseover", "focus"}) do
+    if matchesPlayer(unit, key) then return unit end
+  end
+  local inRaid = IsInRaid()
+  local prefix = inRaid and "raid" or "party"
+  for i = 1, inRaid and 40 or 4 do
+    local unit = prefix .. i
+    if matchesPlayer(unit, key) then return unit end
+  end
 end
 
 local function guildOf(unit, key)
@@ -50,7 +69,7 @@ StaticPopupDialogs.BOOKOFDOGS_ADD = {
       print("|cff" .. NS.GOLD .. "Book of Dogs|r: |cffff5555that description has language that isn't allowed in the Book. Please reword it.|r")
       return true -- keep the popup open so they can fix it
     end
-    NS.Add(data.name, data.realm, data.guild, text, data.full)
+    NS.Add(data.name, data.realm, data.guild, text, data.full, nil, data.class)
     print(("|cff%sBook of Dogs|r: added %s."):format(NS.GOLD, data.full or data.name))
   end,
   EditBoxOnEnterPressed = function(self)
@@ -62,11 +81,16 @@ StaticPopupDialogs.BOOKOFDOGS_ADD = {
 
 function NS.ShowAddPopup(unit, name, realm)
   if not NS.InDog() then print("|cff" .. NS.GOLD .. "Book of Dogs|r: only members of <Dog> can add entries."); return end
-  if unit and not name then name, realm = UnitName(unit) end
-  if not name or name == "" then return end
+  if unit and name == nil then name, realm = UnitName(unit) end
+  if secret(name) or secret(realm) or not name or name == "" then return end
   local key = NS.Key(name, realm)
-  unit = unit or unitFor(key)
-  local data = {name = name, realm = realm, guild = guildOf(unit, key), full = fullName(unit, name)}
+  if unit then
+    if not matchesPlayer(unit, key) then unit = nil end
+  else
+    unit = unitFor(key)
+  end
+  local data = {name = name, realm = realm, guild = guildOf(unit, key), full = fullName(unit, name),
+                class = unit and select(2, UnitClass(unit))}
   if NS.IsDogMember(data.full or key, data.guild) then
     UIErrorsFrame:AddMessage("Members of <Dog> can't be added to the Book of Dogs.", 1, 0.1, 0.1)
     return
@@ -84,12 +108,17 @@ if Menu and Menu.ModifyMenu then
     if not NS.InDog() or not ctx then return end
     local unit, name, realm = ctx.unit, ctx.name, ctx.server
     if unit and not UnitIsPlayer(unit) then return end
-    if not name and unit then name, realm = UnitName(unit) end
-    if not name or name == "" then return end
+    if unit and name == nil then name, realm = UnitName(unit) end
+    if secret(name) or secret(realm) or not name or name == "" then return end
+    local guid = unit and UnitGUID(unit)
     local g = unit and GetGuildInfo(unit)
     if NS.IsDogMember(NS.Key(name, realm), type(g) == "string" and not (issecretvalue and issecretvalue(g)) and g or nil) then return end
     root:CreateDivider()
-    root:CreateButton("|cffffcc33Add to Book of Dogs|r", function() NS.ShowAddPopup(unit, name, realm) end)
+    root:CreateButton("|cffffcc33Add to Book of Dogs|r", function()
+      local current = unit and UnitGUID(unit)
+      local sameUnit = not secret(guid) and not secret(current) and guid and current == guid
+      NS.ShowAddPopup(sameUnit and unit or nil, name, realm)
+    end)
   end
   for _, tag in ipairs(tags) do pcall(Menu.ModifyMenu, tag, add) end
 end
