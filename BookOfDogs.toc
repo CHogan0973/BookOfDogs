@@ -1,0 +1,14 @@
+## Interface: 16001, 11509
+## Title: |cffffcc33Book of Dogs|r
+## Notes: The guild Dog's book of notable players: add anyone from their right-click menu, vote them up or down. /dogs
+## Author: CHogan
+## Version: 73.3
+## SavedVariables: BookOfDogsDB
+## IconTexture: Interface\AddOns\BookOfDogs\dog
+
+Filter.lua
+Core.lua
+Comm.lua
+Menu.lua
+UI.lua
+Minimap.lua
