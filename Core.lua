@@ -34,6 +34,16 @@ function NS.Key(name, realm)
   return name .. "-" .. realm
 end
 function NS.Me() return UnitName("player") end
+-- On Forever, UnitName(unit) returns the first name and the SURNAME ("Baeth",
+-- "Warbreaker"), not name and realm. Turn that pair into the full name; a second
+-- value that is our own realm is treated as a realm.
+function NS.FullFrom(first, second)
+  if type(first) ~= "string" or first == "" then return nil end
+  if type(second) == "string" and second ~= "" and (second:gsub("[%s%-]", "")) ~= NS.MyRealm() then
+    return first .. " " .. second
+  end
+  return first
+end
 
 -- One identity per character: the full in-game name ("Oasli Mage") plus realm.
 -- Forever lets characters share a first name ("Oasli Mage", "Oasli Bank"), so the
@@ -53,6 +63,9 @@ NS.VoterKey = NS.Id
 local myFull
 function NS.MyFull()
   if myFull then return myFull end
+  local a, b = UnitName("player")
+  local f = NS.FullFrom(a, b)
+  if f and f:find(" ", 1, true) then myFull = f; return myFull end
   local guid = UnitGUID("player")
   if guid and not (issecretvalue and issecretvalue(guid)) and GetNumGuildMembers then
     for i = 1, GetNumGuildMembers() do

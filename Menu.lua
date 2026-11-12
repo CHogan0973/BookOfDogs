@@ -43,11 +43,10 @@ end
 
 local function matchesPlayer(unit, key)
   if not UnitExists(unit) or not UnitIsPlayer(unit) then return false end
-  local name, realm = UnitName(unit)
-  if secret(name) or secret(realm) or not name then return false end
-  if NS.Key(name, realm) == key then return true end
-  local full = fullName(unit, name)
-  return full ~= nil and NS.Key(full, realm) == key
+  local first, second = UnitName(unit)
+  if secret(first) or secret(second) or not first then return false end
+  local full = NS.FullFrom(first, second)
+  return NS.Key(first) == key or NS.Key(full) == key or (fullName(unit, first) ~= nil and NS.Key(fullName(unit, first)) == key)
 end
 
 -- A first name alone cannot identify a Forever character without a unit token.
@@ -110,7 +109,10 @@ function NS.ShowAddPopup(unit, name, realm)
   if not NS.InDog() then print("|cff" .. NS.GOLD .. "Book of Dogs|r: only members of <Dog> can add entries."); return end
   if unit and name == nil then name, realm = UnitName(unit) end
   if secret(name) or secret(realm) or not name or name == "" then return end
-  local key = NS.Key(name, realm)
+  -- the second value is a surname on Forever, not a realm
+  local fromPair = NS.FullFrom(name, realm)
+  if fromPair ~= name then realm = nil end
+  local key = NS.Key(name)
   if unit then
     if not matchesPlayer(unit, key) then unit = nil end
   else
@@ -121,13 +123,18 @@ function NS.ShowAddPopup(unit, name, realm)
   if secret(data.class) or not NS.ValidClass(data.class) then data.class = nil end
   if secret(data.guild) then data.guild = "" end
   -- a name typed or clicked with a surname already in it is the full name
-  if not data.full and name:find(" ", 1, true) then data.full = name end
+  if not data.full and fromPair:find(" ", 1, true) then data.full = fromPair end
 
   local function finish()
     -- already in the Book: say so instead of adding again
     local hits = NS.FindEntries(key, data.full)
     if #hits > 0 then
       local e = NS.DB().e[hits[1]]
+      -- an older entry missing the surname or class: admins/editors fill it in now
+      if NS.CanDelete() and ((data.full and not (e.f or e.n):find(" ", 1, true)) or (data.class and not e.c)) then
+        NS.Edit(hits[1], data.full or e.f or e.n, (e.g and e.g ~= "") and e.g or (data.guild or ""), e.d or "", e.c or data.class)
+        print(("|cff%sBook of Dogs|r: updated %s with their full name and class."):format(NS.GOLD, data.full or e.n))
+      end
       print(("|cff%sBook of Dogs|r: |cffff4040DOG|r %s — %s"):format(NS.GOLD, e.f or e.n, e.d or ""))
       NS.ShowEntry(e.f or e.n)
       return
@@ -163,9 +170,10 @@ end
 -- player tooltips: "DOG - note" for anyone in the Book
 local function addDogLines(tooltip, unit)
   if not unit or not NS.DB() or not UnitIsPlayer(unit) then return end
-  local name, realm = UnitName(unit)
-  if secret(name) or secret(realm) or not name then return end
-  local hits = NS.FindEntries(NS.Key(name, realm), fullName(unit, name))
+  local name, second = UnitName(unit)
+  if secret(name) or secret(second) or not name then return end
+  local full = fullName(unit, name) or NS.FullFrom(name, second)
+  local hits = NS.FindEntries(NS.Key(name), full)
   for i = 1, math.min(#hits, 2) do
     local e = NS.DB().e[hits[i]]
     local s = e.s or 0
@@ -196,12 +204,14 @@ if Menu and Menu.ModifyMenu then
     if unit and not UnitIsPlayer(unit) then return end
     if unit and name == nil then name, realm = UnitName(unit) end
     if secret(name) or secret(realm) or not name or name == "" then return end
+    local pairFull = NS.FullFrom(name, realm)
+    if pairFull ~= name then realm = nil end -- a surname, not a realm
     local guid = unit and UnitGUID(unit)
     local g = unit and GetGuildInfo(unit)
-    if NS.IsDogMember(NS.Key(name, realm), type(g) == "string" and not (issecretvalue and issecretvalue(g)) and g or nil) then return end
+    local full = (unit and fullName(unit, name)) or (pairFull:find(" ", 1, true) and pairFull) or nil
+    if NS.IsDogMember(full or NS.Key(name, realm), type(g) == "string" and not (issecretvalue and issecretvalue(g)) and g or nil) then return end
     root:CreateDivider()
     -- already in the Book: show "DOG" and their note instead of the add option
-    local full = unit and fullName(unit, name)
     local hits = NS.FindEntries(NS.Key(name, realm), full)
     if #hits > 0 then
       for i = 1, math.min(#hits, 3) do
@@ -221,7 +231,8 @@ if Menu and Menu.ModifyMenu then
       local sameUnit
       if guid and current and not secret(guid) and not secret(current) then sameUnit = current == guid
       else sameUnit = unit ~= nil and UnitExists(unit) and not secret(UnitName(unit)) and UnitName(unit) == name end
-      NS.ShowAddPopup(sameUnit and unit or nil, name, realm)
+      if sameUnit then NS.ShowAddPopup(unit, name, realm)
+      else NS.ShowAddPopup(nil, full or name, realm) end
     end)
   end
   for _, tag in ipairs(tags) do pcall(Menu.ModifyMenu, tag, add) end
