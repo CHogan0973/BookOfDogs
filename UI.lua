@@ -412,6 +412,13 @@ StaticPopupDialogs.BOOKOFDOGS_DELETE = {
   OnAccept = function(_, id) NS.Delete(id) end,
 }
 
+-- open the Book searched to one player
+function NS.ShowEntry(text)
+  if not frame then build() end
+  frame:Show()
+  search:SetText(text or "")
+end
+
 function NS.Toggle()
   if not frame then build() end
   if frame:IsShown() then frame:Hide() else frame:Show() end

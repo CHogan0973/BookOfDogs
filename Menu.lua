@@ -91,6 +91,14 @@ function NS.ShowAddPopup(unit, name, realm)
   end
   local data = {name = name, realm = realm, guild = guildOf(unit, key), full = fullName(unit, name),
                 class = unit and select(2, UnitClass(unit))}
+  -- already in the Book: say so instead of adding again
+  local hits = NS.FindEntries(key, data.full)
+  if #hits > 0 then
+    local e = NS.DB().e[hits[1]]
+    print(("|cff%sBook of Dogs|r: |cffff4040DOG|r %s — %s"):format(NS.GOLD, e.f or e.n, e.d or ""))
+    NS.ShowEntry(e.f or e.n)
+    return
+  end
   if NS.IsDogMember(data.full or key, data.guild) then
     UIErrorsFrame:AddMessage("Members of <Dog> can't be added to the Book of Dogs.", 1, 0.1, 0.1)
     return
@@ -114,6 +122,21 @@ if Menu and Menu.ModifyMenu then
     local g = unit and GetGuildInfo(unit)
     if NS.IsDogMember(NS.Key(name, realm), type(g) == "string" and not (issecretvalue and issecretvalue(g)) and g or nil) then return end
     root:CreateDivider()
+    -- already in the Book: show "DOG" and their note instead of the add option
+    local full = unit and fullName(unit, name)
+    local hits = NS.FindEntries(NS.Key(name, realm), full)
+    if #hits > 0 then
+      for i = 1, math.min(#hits, 3) do
+        local e = NS.DB().e[hits[i]]
+        local note = e.d or ""
+        if #note > 60 then note = note:sub(1, 57):gsub("[\192-\255][\128-\191]*$", "") .. "..." end
+        local s = e.s or 0
+        root:CreateButton(("|cffff4040DOG|r %s  |cff888888(%s%d)|r"):format(note, s > 0 and "+" or "", s), function()
+          NS.ShowEntry(e.f or e.n)
+        end)
+      end
+      return
+    end
     root:CreateButton("|cffffcc33Add to Book of Dogs|r", function()
       local current = unit and UnitGUID(unit)
       local sameUnit = not secret(guid) and not secret(current) and guid and current == guid

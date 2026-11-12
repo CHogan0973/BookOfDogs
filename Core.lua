@@ -406,6 +406,26 @@ function NS.Delete(id)
   if NS.ApplyDelete(id, x) then NS.Send(("D\t%s\t%d"):format(id, x)) end
 end
 
+-- entries about a player (by full name when known, else by name), best score first
+function NS.FindEntries(key, full)
+  local out = {}
+  if not key or not db then return out end
+  local fullCand = (full and full ~= "" and full) or (key:find(" ", 1, true) and key) or nil
+  for id, e in pairs(db.e) do
+    if not e.x then
+      local hit
+      if fullCand then
+        hit = e.f == fullCand or e.n == fullCand or (not e.f and e.n == fullCand:match("^%S+"))
+      else
+        hit = e.n == key or (e.f ~= nil and e.f:match("^%S+") == key)
+      end
+      if hit then out[#out + 1] = id end
+    end
+  end
+  table.sort(out, function(a, b) return (db.e[a].s or 0) > (db.e[b].s or 0) end)
+  return out
+end
+
 ------------------------------------------------------------------------
 -- sorted view: score high to low, then newest
 ------------------------------------------------------------------------
