@@ -20,9 +20,17 @@ local function ago(t)
   return date("%b %d, %Y", t)
 end
 
+-- the arrow matching your current vote stays lit but can't be clicked again;
+-- the other arrow stays live so you can change your vote
 local function setVoted(btn, on)
-  local t = btn:GetNormalTexture()
-  if t then t:SetDesaturated(not on); t:SetVertexColor(on and 1 or 0.7, on and 1 or 0.7, on and 1 or 0.7) end
+  for _, t in ipairs({btn:GetNormalTexture(), btn:GetDisabledTexture()}) do
+    t:SetDesaturated(not on); t:SetVertexColor(on and 1 or 0.7, on and 1 or 0.7, on and 1 or 0.7)
+  end
+  local changed = btn.voted ~= on
+  btn.voted = on
+  btn:SetEnabled(not on)
+  -- the cursor is still on the arrow that was just clicked: show its new tooltip
+  if changed and GameTooltip:IsOwned(btn) then btn:GetScript("OnEnter")(btn) end
 end
 
 local function refresh()
@@ -47,7 +55,7 @@ local function refresh()
       r.rank:SetText("#" .. (off + i))
       r.score:SetText(s > 0 and ("+" .. s) or tostring(s))
       if s > 0 then r.score:SetTextColor(0.3, 1, 0.3) elseif s < 0 then r.score:SetTextColor(1, 0.4, 0.4) else r.score:SetTextColor(0.8, 0.8, 0.8) end
-      local mine = e.v and e.v[me]
+      local mine = NS.VoteOf(e, me)
       setVoted(r.up, mine == 1); setVoted(r.down, mine == -1)
       -- name in class color, then the class, then the guild
       local cls = NS.ClassName(e.c)
@@ -70,10 +78,21 @@ local function arrow(parent, up)
   b:SetSize(22, 22)
   local base = up and "Interface\\Buttons\\UI-ScrollBar-ScrollUpButton-" or "Interface\\Buttons\\UI-ScrollBar-ScrollDownButton-"
   b:SetNormalTexture(base .. "Up"); b:SetPushedTexture(base .. "Down"); b:SetHighlightTexture(base .. "Highlight", "ADD")
-  b:SetScript("OnClick", function(self) local id = self:GetParent().id; if id then NS.Vote(id, up and 1 or -1) end end)
+  b:SetDisabledTexture(base .. "Up") -- a voted arrow is disabled, but should still look lit
+  b:SetScript("OnClick", function(self)
+    local id = self:GetParent().id
+    if id and not self.voted then NS.Vote(id, up and 1 or -1) end
+  end)
   b:SetScript("OnEnter", function(self)
-    GameTooltip:SetOwner(self, "ANCHOR_LEFT"); GameTooltip:SetText(up and "Vote up" or "Vote down")
-    GameTooltip:AddLine("One vote per person. If you already voted, clicking either arrow takes your vote back.", 0.8, 0.8, 0.8); GameTooltip:Show()
+    GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+    if self.voted then
+      GameTooltip:SetText(up and "You voted up" or "You voted down")
+      GameTooltip:AddLine("Click the other arrow to change your vote.", 0.8, 0.8, 0.8)
+    else
+      GameTooltip:SetText(up and "Vote up" or "Vote down")
+      GameTooltip:AddLine("One vote per person. You can change your vote later by clicking the other arrow.", 0.8, 0.8, 0.8)
+    end
+    GameTooltip:Show()
   end)
   b:SetScript("OnLeave", GameTooltip_Hide)
   return b
@@ -253,7 +272,7 @@ local function votersOf(id)
   local ups, downs = {}, {}
   if e and e.v then
     for who, v in pairs(e.v) do
-      local short = NS.Display(who)
+      local short = NS.VoterName(who)
       if v > 0 then ups[#ups + 1] = short else downs[#downs + 1] = short end
     end
   end

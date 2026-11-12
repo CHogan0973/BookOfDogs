@@ -4,7 +4,7 @@ A World of Warcraft: Forever addon for the guild **Dog**: a shared book of notab
 
 ## Features
 - Right-click any player → **Add to Book of Dogs** with a short note
-- Up/down votes (one per character), ranked list, search, right-click an entry to see who voted
+- Up/down votes (one per BattleTag account: all your characters share one vote; only a salted hash of your BattleTag is shared, never the tag), ranked list, search, right-click an entry to see who voted
 - Syncs across guild members with the addon; new entries are also announced in guild chat
 - Guild members can't be added; racial slurs are blocked
 - Guild master, officers, the main admin and appointed editors can edit and delete entries
