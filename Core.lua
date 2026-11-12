@@ -187,6 +187,17 @@ end
 
 function NS.FeedName() return activeSeed end
 
+function NS.FeedChoices()
+  if not NS.InGuildFeed() then return {} end
+  local seeds = {}
+  for seed in pairs(BookOfDogsDB.feeds[activeGuild].books) do
+    if seed ~= DEFAULT_FEED then seeds[#seeds + 1] = seed end
+  end
+  table.sort(seeds)
+  table.insert(seeds, 1, DEFAULT_FEED)
+  return seeds
+end
+
 local rankOf, officerRank = {}, {}
 local firstCount, rosterHasSurnames, rosterReady = {}, false, false
 -- guild rank for an id, or nil if not in the guild
@@ -767,7 +778,8 @@ local function refreshFeed()
   end
   local seed = profile and profile.seed
   if db and activeGuild == key and activeSeed == seed then return end
-  if activeGuild ~= key then
+  local guildChanged = activeGuild ~= key
+  if guildChanged then
     wipe(rankOf); wipe(firstCount); wipe(officerRank)
     rosterHasSurnames, rosterReady = false, false
   end
@@ -784,29 +796,37 @@ local function refreshFeed()
   db.maxM = db.maxM or 0
   NS.FeedRevision = (NS.FeedRevision or 0) + 1
   if loggedIn then NS.CommFeedChanged() end
-  if NS.CloseFeedDialogs then NS.CloseFeedDialogs() end
   prune()
   if loggedIn and key then
     NS.ScanRoster()
     NS.LearnName(NS.MyFull() .. "-" .. NS.MyRealm())
   end
+  if NS.CloseFeedDialogs then NS.CloseFeedDialogs(guildChanged) end
   NS.Changed()
+  return true
+end
+
+function NS.SelectFeed(seed)
+  if not NS.InGuildFeed() then
+    return false, "Join a guild to select a feed."
+  end
+  seed = (seed or ""):lower():match("^%s*(.-)%s*$")
+  if #seed > 64 or not seed:match("^[%w][%w%-]*$") then
+    return false, "Enter a seed of up to 64 letters, numbers, and hyphens."
+  end
+  BookOfDogsDB.feeds[activeGuild].seed = seed
+  refreshFeed()
   return true
 end
 
 local function feedCommand(seed)
   refreshFeed()
-  if not NS.InGuildFeed() then
+  if seed then
+    local ok, reason = NS.SelectFeed(seed)
+    if not ok then print("Book of Dogs: " .. reason); return end
+  elseif not NS.InGuildFeed() then
     print("Book of Dogs: join a guild to select a feed.")
     return
-  end
-  if seed then
-    if #seed > 64 or not seed:match("^[%w][%w%-]*$") then
-      print("Book of Dogs: use /dogs feed default or a seed of up to 64 letters, numbers, and hyphens.")
-      return
-    end
-    BookOfDogsDB.feeds[activeGuild].seed = seed
-    refreshFeed()
   end
   print(("Book of Dogs: %s feed for <%s>. Use /dogs feed <guid> or /dogs feed default."):format(activeSeed, guildName))
 end

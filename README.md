@@ -16,7 +16,7 @@ Copy the `BookOfDogs` folder into `World of Warcraft\_forever_\Interface\AddOns\
 
 ## Feeds
 
-Every guild starts on its own `default` feed. Run `/dogs feed <guid>` to join a different feed and share the same seed with your guildmates. Seeds are case-insensitive and accept up to 64 letters, numbers, and hyphens. Run `/dogs feed` to see your current selection or `/dogs feed default` to switch back. Each feed keeps its own entries, votes, and editor list.
+Every guild starts on its own `default` feed. Open the Book with `/dogs`, click the **Feed** button beside Search, and choose a saved feed or **Join a feed…** to enter a GUID shared by your guildmates. Seeds are case-insensitive and accept up to 64 letters, numbers, and hyphens. You can also use `/dogs feed <guid>` to switch, `/dogs feed` to see your current selection, or `/dogs feed default` to switch back. Each feed keeps its own entries, votes, and editor list.
 
 The original Dog default feed keeps its existing book, admin, older-client sync, and guild-chat announcements. Other feeds require this version and sync through addon messages. A seed selects a feed within WoW's guild channel. Guild members with a modified client can read or send addon messages, so the seed provides no secrecy or authentication.
 
