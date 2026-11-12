@@ -10,6 +10,11 @@ NS.MAXDESC    = 200
 NS.MAXENTRIES = 500
 NS.TOMB_DAYS  = 30
 NS.GOLD, NS.RED = "ffcc33", "993333"
+-- Votes are counted per BattleTag account (see Account.lua). While this is false, a
+-- client that can't read its BattleTag, and older versions that don't send it, still
+-- vote per character. Turn it on once the whole guild is on a version that sends it:
+-- untagged votes are then ignored and a client without a BattleTag can't vote.
+NS.REQUIRE_BTAG = false
 
 local db
 NS.dirty = true      -- sorted list needs rebuilding
@@ -90,10 +95,12 @@ function NS.MyId() return NS.Id(NS.MyFull()) end
 
 -- full in-game names ("Chogan Seventythree") learned from chat and the roster
 local function names() db.names = db.names or {}; return db.names end
+local firstIdx -- lowercase first name -> voter signature (see NS.VoterSig); rebuilt when a new name is learned
 function NS.LearnName(raw)
   if not db or type(raw) ~= "string" or (issecretvalue and issecretvalue(raw)) then return end
   local id = NS.Id(raw); if not id then return end
-  names()[id] = id:match("^[^%-]+") -- the realm is never shown
+  local nm = id:match("^[^%-]+") -- the realm is never shown
+  if names()[id] ~= nm then names()[id] = nm; firstIdx = nil end
 end
 -- how to show a person: their full in-game name, without the realm
 function NS.Display(who)
@@ -101,6 +108,56 @@ function NS.Display(who)
   local n = id and db and db.names and db.names[id] or (id or tostring(who or "?"))
   return (n:match("^[^%-]+") or n)
 end
+
+-- One person = one vote. The same player can show up under several keys (just the
+-- first name, the full name, the full name squashed together, or a differently
+-- formatted realm), so voters are compared by a signature instead of the raw key:
+-- the lowercase name with spaces removed. A bare first name takes the signature of
+-- the one full name we know that starts with it; if two known players share that
+-- first name it stays on its own, since it can't be told apart.
+local function squashLower(s) return (s:gsub("%s", ""):lower()) end
+local function hasSpace(id) return ((id or ""):match("^[^%-]+") or ""):find(" ", 1, true) ~= nil end
+local function buildFirstIdx()
+  firstIdx = {}
+  for id in pairs(names()) do
+    local nm = id:match("^[^%-]+")
+    if nm and nm:find(" ", 1, true) then
+      local first, sig = nm:match("^%S+"):lower(), squashLower(nm)
+      local cur = firstIdx[first]
+      if cur == nil then firstIdx[first] = sig elseif cur ~= sig then firstIdx[first] = false end
+    end
+  end
+end
+-- the one full name (as a signature) a bare first name stands for, if we know exactly one
+function NS.FullSigOf(first)
+  if not firstIdx then buildFirstIdx() end
+  return firstIdx[first:lower()] or nil
+end
+function NS.VoterSig(raw)
+  if NS.IsAcctKey(raw) then return raw end       -- already an account
+  local acct = NS.AcctOf(raw)                     -- a character we know belongs to an account
+  if acct then return NS.AcctKey(acct) end
+  local id = NS.Id(raw); if not id then return nil end
+  local nm = id:match("^[^%-]+")
+  if nm:find(" ", 1, true) then return squashLower(nm) end
+  local lo = nm:lower()
+  if not firstIdx then buildFirstIdx() end
+  return firstIdx[lo] or lo
+end
+-- the key this person already votes under on an entry (or the key given, if none)
+local function voterKeyIn(votes, voter)
+  if not votes or votes[voter] ~= nil then return voter end
+  local sig = NS.VoterSig(voter)
+  for k in pairs(votes) do if NS.VoterSig(k) == sig then return k end end
+  return voter
+end
+-- someone's current vote on an entry: 1, -1 or nil
+function NS.VoteOf(e, who)
+  if not e or not e.v then return nil end
+  local id = NS.Canon and NS.Canon(who) or NS.Id(who)
+  return id and e.v[voterKeyIn(e.v, id)] or nil
+end
+
 local function base(name) local id = NS.Id(name); return id and id:match("^[^%-]+"):lower() or "" end
 local function firstId(id) local nm, realm = id:match("^(%S+).-%-(.*)$"); return nm and (nm .. "-" .. realm) or id end
 
@@ -304,15 +361,45 @@ end
 function NS.ApplyVote(id, voter, val, m)
   local e = db.e[id]
   if not e or e.x or type(voter) ~= "string" then return false end
-  voter = NS.Canon(NS.Clean(voter, 60))
-  if not voter then return false end
-  val, m = tonumber(val) or 0, tonumber(m) or now()
-  if val > 0 then val = 1 elseif val < 0 then val = -1 else val = nil end
+  -- a voter is a BattleTag account key ("#" + hash) when known, else a character
+  if not NS.IsAcctKey(voter) then
+    voter = NS.Canon(NS.Clean(voter, 60))
+    if not voter then return false end
+    local acct = NS.AcctOf(voter) -- a character we know belongs to an account votes as that account
+    if acct then voter = NS.AcctKey(acct) end
+  end
+  -- only a real vote (1, -1) or taking one back (0) is accepted; anything else is junk
+  val = tonumber(val)
+  if val ~= 1 and val ~= -1 and val ~= 0 then return false end
+  m = tonumber(m) or now()
+  if val == 0 then val = nil end
+  -- everything already recorded for this person (the same account or character under any key)
+  local sig, keys, sum = NS.VoterSig(voter), {}, 0
+  if e.v then
+    for k, v in pairs(e.v) do
+      if k == voter or NS.VoterSig(k) == sig then keys[#keys + 1] = k; sum = sum + v end
+    end
+  end
+  table.sort(keys)
+  -- the key the vote is kept under: an account key as is; a bare first name gives way
+  -- to the full-name key already on file
+  local target = voter
+  if not NS.IsAcctKey(voter) and not hasSpace(voter) then
+    for _, k in ipairs(keys) do if hasSpace(k) then target = k; break end end
+  end
+  local cur
+  if e.v and e.v[target] ~= nil then cur = e.v[target] elseif keys[1] then cur = e.v[keys[1]] end
+  if cur == val and #keys <= 1 then
+    -- already recorded this way: just make sure it sits under the preferred key
+    if keys[1] and keys[1] ~= target then e.v[keys[1]] = nil; e.v[target] = val end
+    if m > (e.m or 0) then e.m = m; bump(m) end
+    return false
+  end
+  -- one person, one vote: replace everything they had with this one
   e.v = e.v or {}
-  local old = e.v[voter]
-  if old == val then if m > (e.m or 0) then e.m = m; bump(m) end return false end
-  e.s = (e.s or 0) - (old or 0) + (val or 0)
-  e.v[voter] = val
+  for _, k in ipairs(keys) do e.v[k] = nil end
+  e.s = (e.s or 0) - sum + (val or 0)
+  e.v[target] = val
   if not next(e.v) then e.v = nil end
   if m > (e.m or 0) then e.m = m end
   bump(m); changed(); return true
@@ -404,13 +491,26 @@ end
 function NS.Vote(id, val)
   if not NS.InDog() then return end
   local e = db.e[id]; if not e or e.x then return end
+  if val ~= 1 and val ~= -1 then return end
   local me = NS.MyId()
-  local mine = e.v and e.v[me]
-  -- every click moves the score by exactly 1: clicking either arrow while you
-  -- already have a vote takes your vote back first
-  if mine then val = 0 end
+  if not me then return end
+  local acct = NS.MyAcct()
+  if acct then
+    NS.LearnAcct(NS.MyFull(), acct, true) -- my characters all vote as this one account
+  elseif NS.REQUIRE_BTAG then
+    print("|cff" .. NS.GOLD .. "Book of Dogs|r: |cffff5555couldn't read your BattleTag, so you can't vote right now. Make sure you're connected to Battle.net.|r")
+    return
+  elseif not NS.toldNoTag then
+    NS.toldNoTag = true
+    print("|cff" .. NS.GOLD .. "Book of Dogs|r: couldn't read your BattleTag, so your votes count per character instead of per account.")
+  end
+  -- one vote per person: voting the way you already have does nothing; the other
+  -- arrow changes your vote (the score moves by 2: your old vote out, new one in)
+  if NS.VoteOf(e, me) == val then return end
   local m = math.max(now(), (e.m or 0) + 1)
-  if NS.ApplyVote(id, me, val, m) then NS.Send(("V\t%s\t%d\t%d"):format(id, val, m)) end
+  if NS.ApplyVote(id, acct and NS.AcctKey(acct) or me, val, m) then
+    NS.Send(("V\t%s\t%d\t%d\t%s"):format(id, val, m, acct or ""))
+  end
 end
 
 function NS.Delete(id)
@@ -510,20 +610,63 @@ function NS.Canon(k)
   end
   return id
 end
+-- Also the duplicate-vote purge: every entry's votes are regrouped one per person
+-- (see NS.VoterSig), invalid votes are dropped, and the scores are recounted. It is
+-- safe to run any number of times, and runs on load and on every roster update, so
+-- a book that already holds duplicates cleans itself up as soon as this version loads.
+local purgedTotal, purgeNoticeQueued = 0, false
+local function purgeNotice(removed)
+  purgedTotal = purgedTotal + removed
+  if purgeNoticeQueued then return end
+  purgeNoticeQueued = true
+  C_Timer.After(6, function() -- let the chat frames come up first
+    purgeNoticeQueued = false
+    if purgedTotal > 0 then
+      print(("|cff%sBook of Dogs|r: cleaned up %d duplicate vote%s."):format(NS.GOLD, purgedTotal, purgedTotal == 1 and "" or "s"))
+    end
+    purgedTotal = 0
+  end)
+end
 function NS.Normalize()
   local fix = NS.Canon
+  local touched, removed = false, 0
   for _, e in pairs(db.e) do
     if not e.x then
       if e.v then
-        local merged = {}
-        for who, v in pairs(e.v) do local k = fix(who); if k and merged[k] == nil then merged[k] = v end end
-        e.v = next(merged) and merged or nil
+        local before, groups = 0, {}
+        for who, v in pairs(e.v) do
+          before = before + 1
+          local sig = (v == 1 or v == -1) and NS.VoterSig(who) or nil
+          if sig then
+            groups[sig] = groups[sig] or {}
+            table.insert(groups[sig], who)
+          end
+        end
+        local merged, after = {}, 0
+        for sig, keys in pairs(groups) do
+          table.sort(keys)
+          local rep = keys[1]
+          for _, k in ipairs(keys) do if hasSpace(k) then rep = k; break end end -- the full-name key is the real one
+          for _, k in ipairs(keys) do if NS.IsAcctKey(k) then rep = k; break end end -- an account key beats any character
+          -- an account's votes all live under its account key, whichever characters cast them
+          local key, vote = NS.IsAcctKey(sig) and sig or (fix(rep) or rep), e.v[rep]
+          if merged[key] == nil then merged[key] = vote; after = after + 1 end
+        end
+        local same = before == after
+        if same then for k in pairs(merged) do if e.v[k] == nil then same = false; break end end end
+        if not same then
+          removed = removed + math.max(0, before - after)
+          touched = true
+          e.v = next(merged) and merged or nil
+        end
       end
       local s = 0
       if e.v then for _, v in pairs(e.v) do s = s + v end end
-      e.s = s
+      if e.s ~= s then e.s = s; touched = true end
     end
   end
+  if removed > 0 then purgeNotice(removed) end
+  if touched then NS.Changed() end
   if db.ed then
     local merged = {}
     for who, r in pairs(db.ed) do
@@ -549,6 +692,7 @@ f:SetScript("OnEvent", function(_, event, arg)
     db.e = db.e or {}
     db.maxM = db.maxM or 0
     db.ed = db.ed or {}
+    db.acct = db.acct or {} -- character -> BattleTag account hash (see Account.lua)
     prune()
     NS.dirty = true
   elseif event == "PLAYER_LOGIN" then
@@ -582,6 +726,10 @@ SlashCmdList.BOOKOFDOGS = function(msg)
     local n = 0; for _, e in pairs(db.e) do if not e.x then n = n + 1 end end
     print(("|cff%sBook of Dogs|r v" .. ((C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata)(ADDON, "Version") or "?") .. ": %d entries. In <Dog>: %s. Can delete: %s. Guild sync: %s."):format(NS.GOLD, n,
       NS.InDog() and "yes" or "no", NS.CanDelete() and "yes" or "no", NS.CommStatus()))
+    local known = 0; for _ in pairs(db.acct or {}) do known = known + 1 end
+    print(("|cff%sBook of Dogs|r votes: BattleTag %s; %d characters linked to accounts; untagged votes %s."):format(
+      NS.GOLD, NS.MyAcct() and "read (votes count per account)" or "NOT readable (your votes count per character)",
+      known, NS.REQUIRE_BTAG and "rejected" or "still accepted"))
     local st = NS.stats or {}
     local r1 = C_ChatInfo.AreOutgoingAddonChatMessagesRestricted and tostring(C_ChatInfo.AreOutgoingAddonChatMessagesRestricted()) or "n/a"
     local r2 = C_ChatInfo.InChatMessagingLockdown and tostring(C_ChatInfo.InChatMessagingLockdown()) or "n/a"

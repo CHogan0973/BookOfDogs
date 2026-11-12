@@ -120,7 +120,7 @@ local function myVersion()
   return (C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata)(ADDON, "Version") or "0"
 end
 local function hello(since, followup)
-  NS.Send(table.concat({"H", since, digest(), followup and "1" or "0", myVersion(), classDigest()}, SEP))
+  NS.Send(table.concat({"H", since, digest(), followup and "1" or "0", myVersion(), classDigest(), NS.AcctDigest()}, SEP))
 end
 function NS.RequestSync(full)
   -- replies to our own request are trusted for 10 minutes (vote lists, deletes, editors)
@@ -133,19 +133,28 @@ function NS.SendEditors()
   for name, r in pairs(NS.DB().ed or {}) do eds[#eds + 1] = esc(name) .. "=" .. r.v .. ":" .. r.m end
   if #eds > 0 then NS.Send(table.concat({"L", table.concat(eds, ",")}, SEP)) end
 end
-local function reply(requester, since, followup)
+-- which characters belong to which BattleTag account (hashed), so votes count per account
+local function sendAcctList()
+  local list = NS.AcctList()
+  if list ~= "" then NS.Send(table.concat({"K", list}, SEP)) end
+end
+-- withBook = false: only the account table is sent (their book already matches ours)
+local function reply(requester, since, followup, withBook)
   pendingReply[requester] = nil
   NS.Send(table.concat({"R", requester}, SEP)) -- tells everyone else to stand down
-  for id, e in pairs(NS.DB().e) do
-    if (e.m or 0) > since then
-      if e.x then NS.Send(table.concat({"D", id, e.x}, SEP))
-      else NS.Send(entryMsg(id, e)); sendVotes(id, e) end
+  if withBook then
+    for id, e in pairs(NS.DB().e) do
+      if (e.m or 0) > since then
+        if e.x then NS.Send(table.concat({"D", id, e.x}, SEP))
+        else NS.Send(entryMsg(id, e)); sendVotes(id, e) end
+      end
     end
+    -- the editors list (small) goes with every reply
+    NS.SendEditors()
   end
-  -- the editors list (small) goes with every reply
-  NS.SendEditors()
+  sendAcctList()
   -- after a full send, say hello back so they can return anything we were missing
-  if since == 0 and followup then hello(0, false) end
+  if withBook and since == 0 and followup then hello(0, false) end
 end
 
 ------------------------------------------------------------------------
@@ -190,7 +199,24 @@ handlers.E = function(sender, id, m, n, g, d, class)
   local e = NS.DB().e[id]; if not e or e.x then return end
   NS.ApplyEntry(id, e.t, m, n, g, e.a, d, "", true, NS.senderDisplay or sender, class ~= "" and class or nil)
 end
-handlers.V = function(sender, id, val, m) NS.ApplyVote(id, sender, val, m) end
+-- a live vote. Newer clients add their account hash; the sender's character is then
+-- known to belong to that account, and the vote counts for the account.
+handlers.V = function(sender, id, val, m, acct)
+  local voter = sender
+  if NS.ValidAcct(acct) then
+    NS.LearnAcct(sender, acct, true)
+    voter = NS.AcctKey(acct)
+  elseif NS.REQUIRE_BTAG and not NS.AcctOf(sender) then
+    return -- untagged votes aren't accepted any more
+  end
+  NS.ApplyVote(id, voter, val, m)
+end
+-- a character saying which account it is (sent at login)
+handlers.I = function(sender, acct) NS.LearnAcct(sender, acct, true) end
+-- the account table inside a sync reply: only fills in what we don't know yet
+handlers.K = function(sender, list)
+  if inReply(sender) then NS.MergeAcctList(list) end
+end
 handlers.W = function(sender, id, m, list)
   if not inReply(sender) then return end -- vote lists only come as part of a sync reply
   local e = NS.DB().e[id]
@@ -198,12 +224,18 @@ handlers.W = function(sender, id, m, list)
   m = tonumber(m) or 0
   local seen = {}
   for who, v in (list or ""):gmatch("([^,=]+)=(%-?%d)") do
-    local k = NS.VoterKey(who)
-    if k then seen[k] = true; NS.ApplyVote(id, k, v, m) end
+    local k = NS.IsAcctKey(who) and who or NS.VoterKey(who) -- account keys are kept as they are
+    local sig = k and NS.VoterSig(k)
+    if sig then seen[sig] = true; NS.ApplyVote(id, k, v, m) end
   end
   -- the sender's list is at least as new as ours: votes missing from it were taken back
+  -- (voters are matched by person, not by exact key, so one person under two keys isn't undone)
   if e.v and m >= (e.m or 0) then
-    for who in pairs(e.v) do if not seen[who] then NS.ApplyVote(id, who, 0, m) end end
+    local mine = {}
+    for who in pairs(e.v) do mine[#mine + 1] = who end
+    for _, who in ipairs(mine) do
+      if not seen[NS.VoterSig(who)] then NS.ApplyVote(id, who, 0, m) end
+    end
   end
 end
 handlers.D = function(sender, id, x)
@@ -225,19 +257,24 @@ local function checkVersion(v)
   end
 end
 
-handlers.H = function(sender, since, theirDigest, followup, ver, theirClassDigest)
+handlers.H = function(sender, since, theirDigest, followup, ver, theirClassDigest, theirAcctDigest)
   checkVersion(ver)
   since = tonumber(since) or 0
   if pendingReply[sender] then return end
   local follow = followup == "1"
+  local withBook = true
   if (theirDigest and theirDigest ~= "" and theirDigest ~= digest())
      or (theirClassDigest and theirClassDigest ~= "" and theirClassDigest ~= classDigest()) then
     since = 0 -- our books differ somewhere: send everything, then compare back
-  elseif (NS.DB().maxM or 0) <= since then
+  elseif (NS.DB().maxM or 0) > since then
+    -- they're missing some entries: send those
+  elseif theirAcctDigest and theirAcctDigest ~= "" and theirAcctDigest ~= NS.AcctDigest() then
+    withBook = false -- books match, but we know different accounts: just trade that table
+  else
     return -- nothing they don't have
   end
   -- wait a random moment; whoever answers first, the rest stay quiet
-  pendingReply[sender] = C_Timer.NewTimer(1 + math.random() * 4, function() reply(sender, since, follow) end)
+  pendingReply[sender] = C_Timer.NewTimer(1 + math.random() * 4, function() reply(sender, since, follow, withBook) end)
 end
 handlers.R = function(sender, requester)
   local t = pendingReply[requester]
@@ -300,5 +337,7 @@ function NS.CommStart()
     if not NS.InDog() then return end
     NS.RequestSync(false)
     if NS.IsMainAdmin() then NS.SendEditors() end -- the main admin keeps everyone's editor list current
+    -- say which BattleTag account I am; Battle.net can connect a little after login, so try again
+    if not NS.AnnounceAcct() then C_Timer.After(30, NS.AnnounceAcct) end
   end)
 end
