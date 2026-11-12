@@ -20,15 +20,13 @@ local function ago(t)
   return date("%b %d, %Y", t)
 end
 
--- the arrow matching your current vote stays lit but can't be clicked again;
--- the other arrow stays live so you can change your vote
+-- the arrow matching your current vote stays lit. Clicking it again takes the vote back
+-- (it never adds a second one); clicking the other arrow changes your vote.
 local function setVoted(btn, on)
-  for _, t in ipairs({btn:GetNormalTexture(), btn:GetDisabledTexture()}) do
-    t:SetDesaturated(not on); t:SetVertexColor(on and 1 or 0.7, on and 1 or 0.7, on and 1 or 0.7)
-  end
+  local t = btn:GetNormalTexture()
+  if t then t:SetDesaturated(not on); t:SetVertexColor(on and 1 or 0.7, on and 1 or 0.7, on and 1 or 0.7) end
   local changed = btn.voted ~= on
   btn.voted = on
-  btn:SetEnabled(not on)
   -- the cursor is still on the arrow that was just clicked: show its new tooltip
   if changed and GameTooltip:IsOwned(btn) then btn:GetScript("OnEnter")(btn) end
 end
@@ -78,19 +76,18 @@ local function arrow(parent, up)
   b:SetSize(22, 22)
   local base = up and "Interface\\Buttons\\UI-ScrollBar-ScrollUpButton-" or "Interface\\Buttons\\UI-ScrollBar-ScrollDownButton-"
   b:SetNormalTexture(base .. "Up"); b:SetPushedTexture(base .. "Down"); b:SetHighlightTexture(base .. "Highlight", "ADD")
-  b:SetDisabledTexture(base .. "Up") -- a voted arrow is disabled, but should still look lit
   b:SetScript("OnClick", function(self)
     local id = self:GetParent().id
-    if id and not self.voted then NS.Vote(id, up and 1 or -1) end
+    if id then NS.Vote(id, self.voted and 0 or (up and 1 or -1)) end -- the lit arrow takes the vote back
   end)
   b:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_LEFT")
     if self.voted then
       GameTooltip:SetText(up and "You voted up" or "You voted down")
-      GameTooltip:AddLine("Click the other arrow to change your vote.", 0.8, 0.8, 0.8)
+      GameTooltip:AddLine("Click again to take your vote back, or click the other arrow to change it.", 0.8, 0.8, 0.8)
     else
       GameTooltip:SetText(up and "Vote up" or "Vote down")
-      GameTooltip:AddLine("One vote per person. You can change your vote later by clicking the other arrow.", 0.8, 0.8, 0.8)
+      GameTooltip:AddLine("One vote per person. Click again to take it back, or the other arrow to change it.", 0.8, 0.8, 0.8)
     end
     GameTooltip:Show()
   end)

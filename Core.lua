@@ -491,7 +491,7 @@ end
 function NS.Vote(id, val)
   if not NS.InDog() then return end
   local e = db.e[id]; if not e or e.x then return end
-  if val ~= 1 and val ~= -1 then return end
+  if val ~= 1 and val ~= -1 and val ~= 0 then return end -- 0 takes my vote back
   local me = NS.MyId()
   if not me then return end
   local acct = NS.MyAcct()
@@ -504,9 +504,9 @@ function NS.Vote(id, val)
     NS.toldNoTag = true
     print("|cff" .. NS.GOLD .. "Book of Dogs|r: couldn't read your BattleTag, so your votes count per character instead of per account.")
   end
-  -- one vote per person: voting the way you already have does nothing; the other
-  -- arrow changes your vote (the score moves by 2: your old vote out, new one in)
-  if NS.VoteOf(e, me) == val then return end
+  -- one vote per person: voting the way you already have does nothing, the other arrow
+  -- changes your vote (the score moves by 2), and 0 takes your vote back
+  if (NS.VoteOf(e, me) or 0) == val then return end
   local m = math.max(now(), (e.m or 0) + 1)
   if NS.ApplyVote(id, acct and NS.AcctKey(acct) or me, val, m) then
     NS.Send(("V\t%s\t%d\t%d\t%s"):format(id, val, m, acct or ""))
