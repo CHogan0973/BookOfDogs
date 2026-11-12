@@ -4,8 +4,8 @@
 local ADDON, NS = ...
 
 NS.PREFIX     = "BookOfDogs"
-NS.GUILD      = "dog"                -- compared lowercase
-NS.ADMINS     = {["chogan seventythree"] = true} -- full in-game names (lowercase, no realm) with full rights
+local LEGACY_GUILD = "dog"
+local DEFAULT_FEED = "default"
 NS.MAXDESC    = 200
 NS.MAXENTRIES = 500
 NS.TOMB_DAYS  = 30
@@ -16,7 +16,7 @@ NS.GOLD, NS.RED = "ffcc33", "993333"
 -- untagged votes are then ignored and a client without a BattleTag can't vote.
 NS.REQUIRE_BTAG = false
 
-local db
+local db, activeGuild, activeSeed, guildName
 NS.dirty = true      -- sorted list needs rebuilding
 NS.listeners = {}    -- UI refresh callbacks
 
@@ -164,10 +164,55 @@ local function firstId(id) local nm, realm = id:match("^(%S+).-%-(.*)$"); return
 ------------------------------------------------------------------------
 -- guild membership and ranks
 ------------------------------------------------------------------------
-function NS.InDog()
-  if not IsInGuild() then return false end
-  local g = GetGuildInfo("player")
-  return g ~= nil and g:lower() == NS.GUILD
+local function currentGuild()
+  if not IsInGuild() then return end
+  local name, _, _, realm = GetGuildInfo("player")
+  if (issecretvalue and (issecretvalue(name) or issecretvalue(realm))) or not name or name == "" then return end
+  realm = realm and realm:gsub("[%s%-]", "") or ""
+  if realm == "" then realm = NS.MyRealm() end
+  return realm:lower() .. ":" .. name:lower(), name
+end
+
+function NS.InGuildFeed()
+  return activeGuild ~= nil and activeGuild == currentGuild()
+end
+
+function NS.LegacyFeed()
+  return activeGuild ~= nil and activeGuild == BookOfDogsDB.legacyGuild and activeSeed == DEFAULT_FEED
+end
+
+function NS.FeedPrefix()
+  return NS.LegacyFeed() and "" or activeSeed .. "\t"
+end
+
+function NS.FeedName() return activeSeed end
+
+function NS.FeedLabel(seed)
+  local profile = activeGuild and BookOfDogsDB.feeds[activeGuild]
+  return profile and profile.labels and profile.labels[seed or activeSeed]
+end
+
+function NS.SetFeedLabel(label)
+  if not NS.InGuildFeed() then return false, "Join a guild to label a feed." end
+  label = NS.Clean(label)
+  local _, length = label:gsub("[^\128-\191]", "")
+  if length > 32 then return false, "Enter a label of up to 32 characters." end
+  local profile = BookOfDogsDB.feeds[activeGuild]
+  profile.labels = profile.labels or {}
+  profile.labels[activeSeed] = label ~= "" and label or nil
+  NS.Changed()
+  return true
+end
+
+function NS.FeedChoices()
+  if not NS.InGuildFeed() then return {} end
+  local seeds = {}
+  for seed in pairs(BookOfDogsDB.feeds[activeGuild].books) do
+    if seed ~= DEFAULT_FEED then seeds[#seeds + 1] = seed end
+  end
+  table.sort(seeds)
+  table.insert(seeds, 1, DEFAULT_FEED)
+  return seeds
 end
 
 local rankOf, officerRank = {}, {}
@@ -217,13 +262,19 @@ function NS.ScanRoster()
   wipe(officerRank)
   if db then NS.Normalize() end
 end
--- is this player one of us? (their guild says Dog, or they're on our roster)
-function NS.IsDogMember(key, guild)
-  if guild and guild:lower() == NS.GUILD then return true end
+-- Check the active guild's name and roster.
+function NS.IsGuildmate(key, guild)
+  if guildName and guild and guild:lower() == guildName:lower() then return true end
   return rankFor(key and NS.Id(key)) ~= nil
 end
 
-function NS.IsMainAdmin(who) return NS.ADMINS[base(who or NS.MyFull())] == true end
+function NS.IsMainAdmin(who)
+  if not NS.InGuildFeed() then return false end
+  local id = NS.Id(who or NS.MyFull())
+  if NS.LegacyFeed() then return base(id) == "chogan seventythree" end
+  return (id ~= nil and rankOf[id] == 0)
+         or ((not who or id == NS.MyId()) and IsGuildLeader and IsGuildLeader())
+end
 
 -- editors: guild members the main admin has given edit/delete rights
 -- db.ed[name] = {v = 1 (editor) or 0 (removed), m = when}
@@ -305,9 +356,10 @@ function NS.SetEditor(name, on)
 end
 
 function NS.CanDelete(who)
+  if not NS.InGuildFeed() then return false end
   who = NS.Id(who or NS.MyFull())
   if not who then return false end
-  if NS.ADMINS[base(who)] then return true end
+  if NS.IsMainAdmin(who) then return true end
   if NS.IsEditor(who) then return true end
   local r = rankFor(who)
   if r == nil and who == NS.MyId() then
@@ -335,6 +387,13 @@ function NS.Clean(s, max)
   return s
 end
 
+local function cleanDescription(desc)
+  desc = NS.Clean(desc)
+  if NS.Blocked(desc) then return end
+  desc = NS.Clean(desc, NS.MAXDESC)
+  if not NS.Blocked(desc) then return desc end
+end
+
 ------------------------------------------------------------------------
 -- entries
 -- e = {n=name, f=full name, g=guild, c=class, d=desc, a=author, t=created, m=modified,
@@ -358,6 +417,7 @@ function NS.ValidId(id) return type(id) == "string" and #id <= 12 and id:match("
 -- ed: who last edited it
 -- canFillClass: a live announcement from the author can fill a missing class
 function NS.ApplyEntry(id, t, m, n, g, a, d, f, canEdit, ed, class, canFillClass)
+  if not NS.InGuildFeed() then return false end
   t, m = tonumber(t) or 0, tonumber(m) or 0
   ed = ed and NS.Clean(ed, 60) or ""
   if (issecretvalue and issecretvalue(class)) or type(class) ~= "string"
@@ -367,10 +427,10 @@ function NS.ApplyEntry(id, t, m, n, g, a, d, f, canEdit, ed, class, canFillClass
   if not NS.ValidId(id) then return false end
   -- everything from the network is cleaned and length-capped before it is stored or shown
   n, g, a, f = NS.Clean(n, 60), NS.Clean(g, 40), NS.Clean(a, 60), NS.Clean(f, 40)
-  d = NS.Clean(d, NS.MAXDESC)
-  if n == "" or d == "" then return false end
-  if NS.Blocked(d) or NS.Blocked(f) or NS.Blocked(n) or NS.Blocked(g) then return false end
-  if NS.IsDogMember(n, g) then return false end -- guildmates can't be added
+  d = cleanDescription(d)
+  if n == "" or not d or d == "" then return false end
+  if NS.Blocked(f) or NS.Blocked(n) or NS.Blocked(g) or NS.Blocked(a) or NS.Blocked(ed) then return false end
+  if NS.IsGuildmate(n, g) then return false end -- guildmates can't be added
   local e = db.e[id]
   if e then
     if e.x then return false end -- deleted stays deleted
@@ -456,23 +516,24 @@ end
 -- local actions ---------------------------------------------------------
 function NS.Add(name, realm, guild, desc, full, manual, class)
   if manual and not NS.CanDelete() then return end
-  if not NS.InDog() then print("|cff" .. NS.GOLD .. "Book of Dogs|r: only members of <Dog> can add entries."); return end
+  if not NS.InGuildFeed() then print("|cff" .. NS.GOLD .. "Book of Dogs|r: join a guild to add entries."); return end
   local n = NS.Key(name, realm)
-  desc = NS.Clean(desc, NS.MAXDESC)
+  desc = cleanDescription(desc)
   if not n or desc == "" then return end
-  if NS.IsDogMember(n, guild) then
-    print("|cff" .. NS.GOLD .. "Book of Dogs|r: |cffff5555members of <Dog> can't be added. The Book is for players from other guilds.|r")
+  if NS.IsGuildmate(n, guild) then
+    print("|cff" .. NS.GOLD .. "Book of Dogs|r: |cffff5555guildmates can't be added. The Book is for players from other guilds.|r")
     return
   end
-  if NS.Blocked(desc) then
+  if not desc then
     print("|cff" .. NS.GOLD .. "Book of Dogs|r: |cffff5555that description has language that isn't allowed in the Book.|r")
     return
   end
   local id, t = NS.NewId(), now()
   full = full and full ~= name and NS.Clean(full, 40) or ""
   guild = NS.Clean(guild or "", 40)
-  NS.ApplyEntry(id, t, t, n, guild, NS.Display(NS.MyId()), desc, full, nil, nil, class)
+  if not NS.ApplyEntry(id, t, t, n, guild, NS.Display(NS.MyId()), desc, full, nil, nil, class) then return end
   NS.SendEntry(id)
+  if not NS.LegacyFeed() then return id end
   -- announce in guild chat (this runs from the popup's button click)
   local who = full ~= "" and full or n
   -- the #id at the end lets other copies of the addon pick the entry up from guild chat
@@ -512,11 +573,11 @@ end
 function NS.Edit(id, name, guild, desc, class)
   local e = db.e[id]
   if not e or e.x or not NS.CanDelete() then return end
-  name, guild, desc = NS.Clean(name, 60), NS.Clean(guild, 40), NS.Clean(desc, NS.MAXDESC)
+  name, guild, desc = NS.Clean(name, 60), NS.Clean(guild, 40), cleanDescription(desc)
   if name == "" or desc == "" then return end
   local function no(msg) print("|cff" .. NS.GOLD .. "Book of Dogs|r: |cffff5555" .. msg .. "|r") end
-  if NS.IsDogMember(name, guild) then return no("members of <Dog> can't be in the Book.") end
-  if NS.Blocked(desc) or NS.Blocked(name) or NS.Blocked(guild) then return no("that has language that isn't allowed in the Book.") end
+  if NS.IsGuildmate(name, guild) then return no("guildmates can't be in the Book.") end
+  if not desc or NS.Blocked(name) or NS.Blocked(guild) then return no("that has language that isn't allowed in the Book.") end
   local m = math.max(now(), (e.m or 0) + 1)
   -- the full name is dropped on edit: the name field is what shows
   if not NS.ValidClass(class) then class = nil end
@@ -527,7 +588,7 @@ function NS.Edit(id, name, guild, desc, class)
 end
 
 function NS.Vote(id, val)
-  if not NS.InDog() then return end
+  if not NS.InGuildFeed() then return end
   local e = db.e[id]; if not e or e.x then return end
   if val ~= 1 and val ~= -1 and val ~= 0 then return end -- 0 takes my vote back
   local me = NS.MyId()
@@ -720,35 +781,106 @@ end
 ------------------------------------------------------------------------
 -- startup
 ------------------------------------------------------------------------
+local loggedIn
+local function refreshFeed()
+  local key, name = currentGuild()
+  local profile
+  if key then
+    local guilds = BookOfDogsDB.feeds
+    profile = guilds[key] or {seed = DEFAULT_FEED, books = {}}
+    guilds[key] = profile
+    if name:lower() == LEGACY_GUILD and not BookOfDogsDB.legacyGuild then
+      BookOfDogsDB.legacyGuild = key
+    end
+  end
+  local seed = profile and profile.seed
+  if db and activeGuild == key and activeSeed == seed then return end
+  local guildChanged = activeGuild ~= key
+  if guildChanged then
+    wipe(rankOf); wipe(firstCount); wipe(officerRank)
+    rosterHasSurnames, rosterReady = false, false
+  end
+  activeGuild, activeSeed, guildName = key, seed, name
+  if NS.LegacyFeed() then
+    db = BookOfDogsDB -- keep the original Dog data readable by older releases
+  elseif profile then
+    db = profile.books[seed] or {}
+    profile.books[seed] = db
+  else
+    db = {}
+  end
+  db.e, db.ed, db.acct = db.e or {}, db.ed or {}, db.acct or {}
+  db.maxM = db.maxM or 0
+  NS.FeedRevision = (NS.FeedRevision or 0) + 1
+  if loggedIn then NS.CommFeedChanged() end
+  prune()
+  if loggedIn and key then
+    NS.ScanRoster()
+    NS.LearnName(NS.MyFull() .. "-" .. NS.MyRealm())
+  end
+  if NS.CloseFeedDialogs then NS.CloseFeedDialogs(guildChanged) end
+  NS.Changed()
+  return true
+end
+
+function NS.SelectFeed(seed)
+  if not NS.InGuildFeed() then
+    return false, "Join a guild to select a feed."
+  end
+  seed = (seed or ""):lower():match("^%s*(.-)%s*$")
+  if #seed > 64 or not seed:match("^[%w][%w%-]*$") then
+    return false, "Enter a seed of up to 64 letters, numbers, and hyphens."
+  end
+  BookOfDogsDB.feeds[activeGuild].seed = seed
+  refreshFeed()
+  return true
+end
+
+local function feedCommand(seed)
+  refreshFeed()
+  if seed then
+    local ok, reason = NS.SelectFeed(seed)
+    if not ok then print("Book of Dogs: " .. reason); return end
+  elseif not NS.InGuildFeed() then
+    print("Book of Dogs: join a guild to select a feed.")
+    return
+  end
+  print(("Book of Dogs: %s feed for <%s>. Use /dogs feed <guid> or /dogs feed default."):format(activeSeed, guildName))
+end
+
 local f = CreateFrame("Frame")
 f:RegisterEvent("ADDON_LOADED")
 f:RegisterEvent("PLAYER_LOGIN")
 f:RegisterEvent("GUILD_ROSTER_UPDATE")
+f:RegisterEvent("PLAYER_GUILD_UPDATE")
 f:SetScript("OnEvent", function(_, event, arg)
   if event == "ADDON_LOADED" and arg == ADDON then
     BookOfDogsDB = BookOfDogsDB or {}
-    db = BookOfDogsDB
-    db.e = db.e or {}
-    db.maxM = db.maxM or 0
-    db.ed = db.ed or {}
-    db.acct = db.acct or {} -- character -> BattleTag account hash (see Account.lua)
-    prune()
-    NS.dirty = true
+    BookOfDogsDB.feeds = BookOfDogsDB.feeds or {}
+    refreshFeed()
   elseif event == "PLAYER_LOGIN" then
-    NS.LearnName(NS.MyFull() .. "-" .. NS.MyRealm())
+    refreshFeed()
+    loggedIn = true
+    if NS.InGuildFeed() then NS.LearnName(NS.MyFull() .. "-" .. NS.MyRealm()) end
     if C_GuildInfo and C_GuildInfo.GuildRoster then C_GuildInfo.GuildRoster() elseif GuildRoster then GuildRoster() end
     if NS.CommStart then NS.CommStart() end
+  elseif event == "PLAYER_GUILD_UPDATE" then
+    refreshFeed()
   elseif event == "GUILD_ROSTER_UPDATE" then
-    NS.ScanRoster()
+    local switched = refreshFeed()
+    if NS.InGuildFeed() and (not switched or not loggedIn) then NS.ScanRoster() end
   end
 end)
 
 SLASH_BOOKOFDOGS1, SLASH_BOOKOFDOGS2 = "/dogs", "/bookofdogs"
 SlashCmdList.BOOKOFDOGS = function(msg)
   msg = (msg or ""):lower():match("^%s*(.-)%s*$")
-  if msg == "sync" then
+  if msg == "feed" or msg:match("^feed%s") then
+    feedCommand(msg:match("^feed%s+(.+)$"))
+  elseif msg == "sync" then
     NS.RequestSync(true)
   elseif msg == "rebuild" then
+    if not NS.InGuildFeed() then return end
     -- start over from the guild's copy: clears this book (not the editors list) and asks for everything
     wipe(db.e); db.maxM = 0; NS.dirty = true; NS.Changed()
     print("|cff" .. NS.GOLD .. "Book of Dogs|r: cleared your copy; pulling the whole book from guildmates online...")
@@ -763,8 +895,8 @@ SlashCmdList.BOOKOFDOGS = function(msg)
     if UnitExists("target") and UnitIsPlayer("target") then NS.ShowAddPopup("target") else print("|cff" .. NS.GOLD .. "Book of Dogs|r: target a player first.") end
   elseif msg == "status" then
     local n = 0; for _, e in pairs(db.e) do if not e.x then n = n + 1 end end
-    print(("|cff%sBook of Dogs|r v" .. ((C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata)(ADDON, "Version") or "?") .. ": %d entries. In <Dog>: %s. Can delete: %s. Guild sync: %s."):format(NS.GOLD, n,
-      NS.InDog() and "yes" or "no", NS.CanDelete() and "yes" or "no", NS.CommStatus()))
+    print(("|cff%sBook of Dogs|r v" .. ((C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata)(ADDON, "Version") or "?") .. ": %d entries. Guild: %s. Feed: %s. Can delete: %s. Guild sync: %s."):format(NS.GOLD, n,
+      guildName or "none", activeSeed or "none", NS.CanDelete() and "yes" or "no", NS.CommStatus()))
     local known = 0; for _ in pairs(db.acct or {}) do known = known + 1 end
     print(("|cff%sBook of Dogs|r votes: BattleTag %s; %d characters linked to accounts; untagged votes %s."):format(
       NS.GOLD, NS.MyAcct() and "read (votes count per account)" or "NOT readable (your votes count per character)",

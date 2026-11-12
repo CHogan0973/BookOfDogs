@@ -10,10 +10,10 @@ local CHUNK = 240
 ------------------------------------------------------------------------
 -- can we send right now?
 ------------------------------------------------------------------------
--- Like OpenMap, we don't trust the "restricted" flags up front: we just send and
--- read the game's answer. Only being outside a guild stops us.
+-- The game reports its send restrictions. Check the active guild before handing
+-- queued messages to the game so they cannot go out to a newly joined guild.
 local function blocked()
-  if not IsInGuild() then return "not in a guild" end
+  if not NS.InGuildFeed() then return "no active guild feed" end
   return nil
 end
 local resultNames
@@ -62,16 +62,21 @@ local function push(raw)
   if not ticker then ticker = C_Timer.NewTicker(0.3, pump) end
 end
 
--- split long messages: "+" = more parts follow, "." = last (or only) part
+-- Tagged feeds distinguish standalone messages and the first fragment, so
+-- switching feeds mid-send can't corrupt the next message to the same peer.
 function NS.Send(msg)
-  if not NS.InDog() then return end
+  if not NS.InGuildFeed() then return end
+  local prefix = NS.FeedPrefix()
+  local chunk = CHUNK - #prefix
   local i, n = 1, #msg
-  while n - i + 1 > CHUNK do
-    local j = i + CHUNK - 1
+  while n - i + 1 > chunk do
+    local j = i + chunk - 1
     while j > i and msg:byte(j + 1) and msg:byte(j + 1) >= 128 and msg:byte(j + 1) < 192 do j = j - 1 end -- keep UTF-8 letters whole
-    push("+" .. msg:sub(i, j)); i = j + 1
+    local kind = prefix ~= "" and i == 1 and ":" or "+"
+    push(prefix .. kind .. msg:sub(i, j)); i = j + 1
   end
-  push("." .. msg:sub(i))
+  local kind = prefix ~= "" and i == 1 and "!" or "."
+  push(prefix .. kind .. msg:sub(i))
 end
 
 local function esc(s) return (tostring(s or ""):gsub(SEP, " ")) end
@@ -123,6 +128,7 @@ local function hello(since, followup)
   NS.Send(table.concat({"H", since, digest(), followup and "1" or "0", myVersion(), classDigest(), NS.AcctDigest()}, SEP))
 end
 function NS.RequestSync(full)
+  if not NS.InGuildFeed() then return end
   -- replies to our own request are trusted for 10 minutes (vote lists, deletes, editors)
   NS.askedAt = GetTime()
   hello(full and 0 or (NS.DB().maxM or 0), true)
@@ -291,7 +297,14 @@ end
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("CHAT_MSG_ADDON")
 frame:SetScript("OnEvent", function(_, _, prefix, msg, channel, sender)
-  if prefix ~= PREFIX or channel ~= "GUILD" or not NS.DB() then return end
+  if prefix ~= PREFIX or channel ~= "GUILD" or not NS.InGuildFeed() then return end
+  if type(msg) ~= "string" or type(sender) ~= "string"
+     or (issecretvalue and (issecretvalue(msg) or issecretvalue(sender))) then return end
+  local feed = NS.FeedPrefix()
+  if msg:sub(1, #feed) ~= feed then return end
+  local kind = msg:sub(#feed + 1, #feed + 1)
+  if kind ~= "+" and kind ~= "." and (feed == "" or (kind ~= ":" and kind ~= "!")) then return end
+  local body = msg:sub(#feed + 2)
   -- everyone is handled by one id per character ("First-Realm"); their full
   -- in-game name ("First Last") is remembered for display
   NS.LearnName(sender)
@@ -299,14 +312,20 @@ frame:SetScript("OnEvent", function(_, _, prefix, msg, channel, sender)
   sender = NS.Id(sender)
   if not sender or sender == NS.MyId() then return end
   NS.stats.recv = NS.stats.recv + 1
-  local kind, body = msg:sub(1, 1), msg:sub(2)
-  if kind == "+" then
-    local b = (buffers[sender] or "") .. body
+  if kind == ":" or kind == "+" then
+    local previous = buffers[sender]
+    if kind == "+" and feed ~= "" and not previous then return end
+    local b = (kind == "+" and previous or "") .. body
     buffers[sender] = #b <= 4096 and b or nil -- nothing we send is this long; drop junk
     return
   end
-  if kind ~= "." then return end
-  if buffers[sender] then body = buffers[sender] .. body; buffers[sender] = nil end
+  if kind == "." then
+    local previous = buffers[sender]
+    if feed ~= "" and not previous then return end
+    body = (previous or "") .. body
+  end
+  buffers[sender] = nil
+  if feed ~= "" and #body > 4096 then return end
   local ok, err = pcall(handle, sender, body)
   if not ok and BookOfDogsDB and BookOfDogsDB.debug then print("Book of Dogs:", err) end
 end)
@@ -316,7 +335,8 @@ end)
 local chatFrame = CreateFrame("Frame")
 chatFrame:RegisterEvent("CHAT_MSG_GUILD")
 chatFrame:SetScript("OnEvent", function(_, _, text, sender)
-  if not NS.DB() or type(text) ~= "string" or (issecretvalue and issecretvalue(text)) then return end
+  if not NS.InGuildFeed() or not NS.LegacyFeed() or type(text) ~= "string"
+     or (issecretvalue and issecretvalue(text)) then return end
   if text:sub(1, 15) ~= "[Book of Dogs] " then return end
   NS.LearnName(sender)
   local disp = NS.Display(sender)
@@ -330,14 +350,30 @@ chatFrame:SetScript("OnEvent", function(_, _, text, sender)
   if NS.ApplyEntry(id, t, t, name, guild or "", disp, desc, "", false) then NS.stats.chat = NS.stats.chat + 1 end
 end)
 
-function NS.CommStart()
-  if C_ChatInfo.RegisterAddonMessagePrefix then C_ChatInfo.RegisterAddonMessagePrefix(PREFIX) end
+function NS.CommFeedChanged()
+  if ticker then ticker:Cancel(); ticker = nil end
+  wipe(queue); head = 1
+  for _, timer in pairs(pendingReply) do timer:Cancel() end
+  wipe(pendingReply); wipe(buffers); wipe(recent)
+  NS.askedAt, NS.inReplyFrom, NS.inReplyUntil, NS.senderDisplay = nil, nil, nil, nil
+  NS.stats = {sent = 0, failed = 0, recv = 0, chat = 0, queued = 0}
+  if not NS.InGuildFeed() then return end
+  local revision = NS.FeedRevision
   -- give the guild roster a moment to load, then ask what we missed
   C_Timer.After(10, function()
-    if not NS.InDog() then return end
+    if revision ~= NS.FeedRevision or not NS.InGuildFeed() then return end
     NS.RequestSync(false)
     if NS.IsMainAdmin() then NS.SendEditors() end -- the main admin keeps everyone's editor list current
     -- say which BattleTag account I am; Battle.net can connect a little after login, so try again
-    if not NS.AnnounceAcct() then C_Timer.After(30, NS.AnnounceAcct) end
+    if not NS.AnnounceAcct() then
+      C_Timer.After(30, function()
+        if revision == NS.FeedRevision and NS.InGuildFeed() then NS.AnnounceAcct() end
+      end)
+    end
   end)
+end
+
+function NS.CommStart()
+  if C_ChatInfo.RegisterAddonMessagePrefix then C_ChatInfo.RegisterAddonMessagePrefix(PREFIX) end
+  NS.CommFeedChanged()
 end
