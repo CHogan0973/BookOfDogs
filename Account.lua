@@ -11,7 +11,7 @@ NS.ACCT_SALT = "BookOfDogs/Dog/votes/v1:"
 local HASH_LEN = 16 -- hex characters kept from the SHA-256 (64 bits)
 
 ------------------------------------------------------------------------
--- SHA-256 (uses the game's built-in bit library)
+-- SHA-256
 ------------------------------------------------------------------------
 local K = {
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -24,9 +24,33 @@ local K = {
   0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 }
 
+-- 32-bit arithmetic with plain numbers. The game's bit library has no rotate and its
+-- results can be signed, so none of it is used here.
+local MOD = 4294967296
+local function band(a, b)
+  local r, p = 0, 1
+  for _ = 1, 32 do
+    local x, y = a % 2, b % 2
+    if x == 1 and y == 1 then r = r + p end
+    a, b, p = (a - x) / 2, (b - y) / 2, p * 2
+  end
+  return r
+end
+local function bxor(a, b)
+  local r, p = 0, 1
+  for _ = 1, 32 do
+    local x, y = a % 2, b % 2
+    if x ~= y then r = r + p end
+    a, b, p = (a - x) / 2, (b - y) / 2, p * 2
+  end
+  return r
+end
+local function bnot(a) return MOD - 1 - a end
+local function shr(a, n) return math.floor(a / 2 ^ n) end
+local function ror(a, n) return shr(a, n) + (a * 2 ^ (32 - n)) % MOD end
+local function hex32(x) return ("%04x%04x"):format(math.floor(x / 65536), x % 65536) end
+
 local function sha256(msg)
-  local band, bxor, bnot, rshift, ror, tobit, tohex =
-    bit.band, bit.bxor, bit.bnot, bit.rshift, bit.ror, bit.tobit, bit.tohex
   local len = #msg
   local bits = len * 8
   msg = msg .. "\128" .. string.rep("\0", (55 - len) % 64)
@@ -38,28 +62,28 @@ local function sha256(msg)
   for chunk = 1, #msg, 64 do
     for i = 0, 15 do
       local a, b, c, d = msg:byte(chunk + i * 4, chunk + i * 4 + 3)
-      w[i] = tobit(a * 16777216 + b * 65536 + c * 256 + d)
+      w[i] = a * 16777216 + b * 65536 + c * 256 + d
     end
     for i = 16, 63 do
       local w15, w2 = w[i - 15], w[i - 2]
-      local s0 = bxor(ror(w15, 7), ror(w15, 18), rshift(w15, 3))
-      local s1 = bxor(ror(w2, 17), ror(w2, 19), rshift(w2, 10))
-      w[i] = tobit(w[i - 16] + s0 + w[i - 7] + s1)
+      local s0 = bxor(bxor(ror(w15, 7), ror(w15, 18)), shr(w15, 3))
+      local s1 = bxor(bxor(ror(w2, 17), ror(w2, 19)), shr(w2, 10))
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) % MOD
     end
     local a, b, c, d, e, f, g, h = h0, h1, h2, h3, h4, h5, h6, h7
     for i = 0, 63 do
-      local S1 = bxor(ror(e, 6), ror(e, 11), ror(e, 25))
+      local S1 = bxor(bxor(ror(e, 6), ror(e, 11)), ror(e, 25))
       local ch = bxor(band(e, f), band(bnot(e), g))
-      local t1 = tobit(h + S1 + ch + K[i + 1] + w[i])
-      local S0 = bxor(ror(a, 2), ror(a, 13), ror(a, 22))
-      local maj = bxor(band(a, b), band(a, c), band(b, c))
-      local t2 = tobit(S0 + maj)
-      h, g, f, e, d, c, b, a = g, f, e, tobit(d + t1), c, b, a, tobit(t1 + t2)
+      local t1 = (h + S1 + ch + K[i + 1] + w[i]) % MOD
+      local S0 = bxor(bxor(ror(a, 2), ror(a, 13)), ror(a, 22))
+      local maj = bxor(bxor(band(a, b), band(a, c)), band(b, c))
+      local t2 = (S0 + maj) % MOD
+      h, g, f, e, d, c, b, a = g, f, e, (d + t1) % MOD, c, b, a, (t1 + t2) % MOD
     end
-    h0, h1, h2, h3 = tobit(h0 + a), tobit(h1 + b), tobit(h2 + c), tobit(h3 + d)
-    h4, h5, h6, h7 = tobit(h4 + e), tobit(h5 + f), tobit(h6 + g), tobit(h7 + h)
+    h0, h1, h2, h3 = (h0 + a) % MOD, (h1 + b) % MOD, (h2 + c) % MOD, (h3 + d) % MOD
+    h4, h5, h6, h7 = (h4 + e) % MOD, (h5 + f) % MOD, (h6 + g) % MOD, (h7 + h) % MOD
   end
-  return tohex(h0) .. tohex(h1) .. tohex(h2) .. tohex(h3) .. tohex(h4) .. tohex(h5) .. tohex(h6) .. tohex(h7)
+  return hex32(h0) .. hex32(h1) .. hex32(h2) .. hex32(h3) .. hex32(h4) .. hex32(h5) .. hex32(h6) .. hex32(h7)
 end
 NS.SHA256 = sha256
 
@@ -79,10 +103,11 @@ end
 local myAcct
 function NS.MyAcct()
   if myAcct then return myAcct end
-  if not bit then return nil end
   local tag = readTag()
   if not tag then return nil end -- try again next time; Battle.net can connect after login
-  myAcct = sha256(NS.ACCT_SALT .. tag):sub(1, HASH_LEN)
+  local ok, h = pcall(sha256, NS.ACCT_SALT .. tag) -- a hashing problem must never break voting
+  if not ok or type(h) ~= "string" then return nil end
+  myAcct = h:sub(1, HASH_LEN)
   return myAcct
 end
 
