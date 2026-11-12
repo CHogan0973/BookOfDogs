@@ -108,6 +108,32 @@ function NS.ShowAddPopup(unit, name, realm)
 end
 
 -- right-click menus (modern menu system)
+-- player tooltips: "DOG - note" for anyone in the Book
+local function addDogLines(tooltip, unit)
+  if not unit or not NS.DB() or not UnitIsPlayer(unit) then return end
+  local name, realm = UnitName(unit)
+  if secret(name) or secret(realm) or not name then return end
+  local hits = NS.FindEntries(NS.Key(name, realm), fullName(unit, name))
+  for i = 1, math.min(#hits, 2) do
+    local e = NS.DB().e[hits[i]]
+    local s = e.s or 0
+    tooltip:AddLine(("|cffff4040DOG|r - %s  |cff888888(%s%d)|r"):format(e.d or "", s > 0 and "+" or "", s), 1, 1, 1, true)
+  end
+  if #hits > 0 then tooltip:Show() end
+end
+if TooltipDataProcessor and TooltipDataProcessor.AddTooltipPostCall and Enum and Enum.TooltipDataType then
+  TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Unit, function(tooltip)
+    if tooltip ~= GameTooltip or not tooltip.GetUnit then return end
+    local _, unit = tooltip:GetUnit()
+    if unit and not secret(unit) then pcall(addDogLines, tooltip, unit) end
+  end)
+elseif GameTooltip and GameTooltip:HasScript("OnTooltipSetUnit") then
+  GameTooltip:HookScript("OnTooltipSetUnit", function(tooltip)
+    local _, unit = tooltip:GetUnit()
+    if unit then pcall(addDogLines, tooltip, unit) end
+  end)
+end
+
 if Menu and Menu.ModifyMenu then
   local tags = {"MENU_UNIT_PLAYER", "MENU_UNIT_TARGET", "MENU_UNIT_FOCUS", "MENU_UNIT_PARTY", "MENU_UNIT_RAID_PLAYER",
                 "MENU_UNIT_ENEMY_PLAYER", "MENU_UNIT_FRIEND", "MENU_UNIT_GUILD", "MENU_UNIT_CHAT_ROSTER",

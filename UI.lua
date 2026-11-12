@@ -268,6 +268,57 @@ function NS.ShowVoters(owner, id)
   GameTooltip:Show()
 end
 
+-- /who lookup for a typed name. Must start from a click (the game requires it).
+-- callback(info or nil); info = {name, guild, level, class}
+local whoWait
+function NS.WhoLookup(name, callback)
+  local send = C_FriendList and C_FriendList.SendWho or SendWho
+  if not send or not name or name == "" then callback(nil); return end
+  local first = name:match("^%S+")
+  local ev = CreateFrame("Frame")
+  -- keep the Who window from popping open for our lookup
+  local ff = FriendsFrame
+  local hadEvent = ff and ff.IsEventRegistered and ff:IsEventRegistered("WHO_LIST_UPDATE")
+  if hadEvent then ff:UnregisterEvent("WHO_LIST_UPDATE") end
+  if C_FriendList and C_FriendList.SetWhoToUi then pcall(C_FriendList.SetWhoToUi, true) elseif SetWhoToUI then pcall(SetWhoToUI, 1) end
+  local done = false
+  local function finish(info)
+    if done then return end
+    done = true
+    ev:UnregisterAllEvents(); ev:SetScript("OnEvent", nil)
+    if hadEvent then ff:RegisterEvent("WHO_LIST_UPDATE") end
+    callback(info)
+  end
+  ev:RegisterEvent("WHO_LIST_UPDATE")
+  ev:SetScript("OnEvent", function()
+    local n = (C_FriendList and C_FriendList.GetNumWhoResults or GetNumWhoResults)() or 0
+    local best
+    for i = 1, n do
+      local w
+      if C_FriendList and C_FriendList.GetWhoInfo then
+        w = C_FriendList.GetWhoInfo(i)
+        w = w and {name = w.fullName, guild = w.fullGuildName, level = w.level, class = w.filename}
+      else
+        local nm, gd, lv, _, _, _, file = GetWhoInfo(i)
+        w = {name = nm, guild = gd, level = lv, class = file}
+      end
+      if w and type(w.name) == "string" and not (issecretvalue and issecretvalue(w.name)) then
+        local wn = w.name:match("^[^%-]+")
+        if wn == name then best = w; break end                       -- exact full name
+        if not best and wn:match("^%S+") == first and not name:find(" ") then best = w end
+      end
+    end
+    if best then
+      if best.guild == "" then best.guild = nil end
+      if not NS.ValidClass(best.class) then best.class = nil end
+    end
+    finish(best)
+  end)
+  C_Timer.After(4, function() finish(nil) end) -- no answer (offline, or /who on cooldown)
+  local ok = pcall(send, 'n-"' .. name .. '"')
+  if not ok then finish(nil) end
+end
+
 -- admin editor: new entry by typing a name, or edit an existing one
 local editor
 local function field(parent, label, y, width, max)
@@ -329,10 +380,33 @@ local function buildEditor()
   local function submit()
     local n, g, d = editor.name:GetText(), editor.guild:GetText(), editor.desc:GetText()
     if NS.Clean(n) == "" or NS.Clean(d) == "" then UIErrorsFrame:AddMessage("Name and description are required.", 1, 0.1, 0.1) return end
-    local done
-    if editor.id then done = NS.Edit(editor.id, n, g, d, editor.class)
-    else done = NS.Add(n, nil, g, d, nil, true, editor.class) end
-    if done then editor:Hide() end
+    if NS.Blocked(d) then
+      print("|cff" .. NS.GOLD .. "Book of Dogs|r: |cffff5555that description has language that isn't allowed in the Book.|r")
+      return
+    end
+    if editor.id then
+      if NS.Edit(editor.id, n, g, d, editor.class) then editor:Hide() end
+      return
+    end
+    -- new entry: look the player up with /who for their class (and guild if left blank)
+    if editor.busy then return end
+    editor.busy = true; save:SetText("Looking up..."); save:Disable()
+    NS.WhoLookup(NS.Clean(n, 60), function(info)
+      editor.busy = false; save:SetText(SAVE or "Save"); save:Enable()
+      local class = editor.class or (info and info.class)
+      if g == "" and info and info.guild then g = info.guild end
+      if info and info.guild and info.guild:lower() == NS.GUILD then
+        print("|cff" .. NS.GOLD .. "Book of Dogs|r: |cffff5555" .. n .. " is in <Dog> and can't be added.|r")
+        return
+      end
+      if info then
+        print(("|cff%sBook of Dogs|r: found %s: level %s %s%s."):format(NS.GOLD, info.name or n, info.level or "?",
+          NS.ClassName(info.class) or "?", info.guild and (" <" .. info.guild .. ">") or ""))
+      else
+        print("|cff" .. NS.GOLD .. "Book of Dogs|r: /who didn't find " .. n .. " online, so the class is left unknown (you can set it later).")
+      end
+      if NS.Add(n, nil, g, d, nil, true, class) then editor:Hide() end
+    end)
   end
   save:SetScript("OnClick", submit)
   editor.desc:SetScript("OnEnterPressed", submit)
