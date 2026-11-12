@@ -574,6 +574,8 @@ SlashCmdList.BOOKOFDOGS = function(msg)
     NS.DebugTarget()
   elseif msg == "minimap" then
     NS.ToggleMinimap()
+  elseif msg == "icons" or msg == "plates" or msg:match("^icon%s") then
+    NS.NameplateCmd(msg)
   elseif msg == "add" then
     if UnitExists("target") and UnitIsPlayer("target") then NS.ShowAddPopup("target") else print("|cff" .. NS.GOLD .. "Book of Dogs|r: target a player first.") end
   elseif msg == "status" then
