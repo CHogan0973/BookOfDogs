@@ -91,20 +91,44 @@ function NS.ShowAddPopup(unit, name, realm)
   end
   local data = {name = name, realm = realm, guild = guildOf(unit, key), full = fullName(unit, name),
                 class = unit and select(2, UnitClass(unit))}
-  -- already in the Book: say so instead of adding again
-  local hits = NS.FindEntries(key, data.full)
-  if #hits > 0 then
-    local e = NS.DB().e[hits[1]]
-    print(("|cff%sBook of Dogs|r: |cffff4040DOG|r %s — %s"):format(NS.GOLD, e.f or e.n, e.d or ""))
-    NS.ShowEntry(e.f or e.n)
+  if not NS.ValidClass(data.class) then data.class = nil end
+  -- a name typed or clicked with a surname already in it is the full name
+  if not data.full and name:find(" ", 1, true) then data.full = name end
+
+  local function finish()
+    -- already in the Book: say so instead of adding again
+    local hits = NS.FindEntries(key, data.full)
+    if #hits > 0 then
+      local e = NS.DB().e[hits[1]]
+      print(("|cff%sBook of Dogs|r: |cffff4040DOG|r %s — %s"):format(NS.GOLD, e.f or e.n, e.d or ""))
+      NS.ShowEntry(e.f or e.n)
+      return
+    end
+    if NS.IsDogMember(data.full or key, data.guild) then
+      UIErrorsFrame:AddMessage("Members of <Dog> can't be added to the Book of Dogs.", 1, 0.1, 0.1)
+      return
+    end
+    local cls = NS.ClassName(data.class)
+    local shown = NS.ColorName(data.full or name, data.class) .. (cls and (" " .. NS.ColorName(cls, data.class)) or "")
+                  .. ((data.guild or "") ~= "" and (" <" .. data.guild .. ">") or "")
+    StaticPopup_Show("BOOKOFDOGS_ADD", shown, nil, data)
+  end
+
+  -- missing the surname or class (a name clicked in chat, or a unit the game won't
+  -- describe): ask /who for the full name, class and guild first
+  if (not data.full or not data.class) and NS.WhoLookup then
+    NS.WhoLookup(data.full or name, function(info)
+      if info then
+        local wn = info.name and info.name:match("^[^%-]+")
+        if wn and wn:find(" ", 1, true) and not data.full then data.full = wn end
+        data.class = data.class or info.class
+        if (data.guild or "") == "" and info.guild then data.guild = info.guild end
+      end
+      finish()
+    end)
     return
   end
-  if NS.IsDogMember(data.full or key, data.guild) then
-    UIErrorsFrame:AddMessage("Members of <Dog> can't be added to the Book of Dogs.", 1, 0.1, 0.1)
-    return
-  end
-  local shown = (data.full or name) .. (data.guild ~= "" and (" <" .. data.guild .. ">") or "")
-  StaticPopup_Show("BOOKOFDOGS_ADD", shown, nil, data)
+  finish()
 end
 
 -- right-click menus (modern menu system)
