@@ -9,7 +9,7 @@ local INSET_PAD = 8                -- space above the first row and below the la
 local SCROLLBAR_W = 28             -- room the scroll bar takes on the right when it is showing
 local CHROME_H = 66 + 32           -- inset's top + bottom offsets inside the window
 local MAXH = MAXROWS * ROWH + INSET_PAD + CHROME_H
-local frame, rows, scroll, search, countText, list, inset
+local frame, rows, scroll, search, countText, feedText, list, inset
 local visibleRows = 1
 
 local function ago(t)
@@ -34,6 +34,8 @@ end
 local function refresh()
   if not frame or not frame:IsShown() then return end
   list = NS.Sorted(search:GetText())
+  local seed = NS.FeedName()
+  feedText:SetText(seed and ("Feed: " .. seed) or "Join a guild to use a feed")
   countText:SetText(#list .. (#list == 1 and " entry" or " entries"))
   visibleRows = math.min(MAXROWS, math.max(1, math.floor((frame:GetHeight() - CHROME_H - INSET_PAD) / ROWH)))
   local showBar = FauxScrollFrame_Update(scroll, #list, visibleRows, ROWH)
@@ -120,7 +122,7 @@ end
 
 local function build()
   frame, inset = shell()
-  local saved = NS.DB().ui or {}
+  local saved = BookOfDogsDB.ui or {}
   frame:SetSize(math.max(MINW, math.min(MAXW, saved.w or W)), math.max(MINH, math.min(MAXH, saved.h or H)))
   frame:ClearAllPoints(); frame:SetPoint("CENTER")
   -- resizable: the grip in the bottom-right corner; the rows re-fit as the window changes
@@ -133,14 +135,14 @@ local function build()
   tinsert(UISpecialFrames, "BookOfDogsFrame")
   inset:ClearAllPoints(); inset:SetPoint("TOPLEFT", 8, -66); inset:SetPoint("BOTTOMRIGHT", -8, 32)
 
-  local sub = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  sub:SetPoint("TOPLEFT", 66, -38); sub:SetText("The guild's book of dogs")
-
   local okSearch
   okSearch, search = pcall(CreateFrame, "EditBox", "BookOfDogsSearch", frame, "SearchBoxTemplate")
   if not okSearch or not search then search = CreateFrame("EditBox", "BookOfDogsSearch", frame, "InputBoxTemplate") end
   search:SetSize(200, 20); search:SetPoint("TOPRIGHT", -14, -36); search:SetAutoFocus(false)
   search:HookScript("OnTextChanged", function() FauxScrollFrame_SetOffset(scroll, 0); scroll:SetVerticalScroll(0); refresh() end)
+  feedText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  feedText:SetPoint("TOPLEFT", 66, -38); feedText:SetPoint("RIGHT", search, "LEFT", -12, 0)
+  feedText:SetJustifyH("LEFT"); feedText:SetWordWrap(false)
 
   scroll = CreateFrame("ScrollFrame", "BookOfDogsScroll", inset, "FauxScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", 0, -4); scroll:SetPoint("BOTTOMRIGHT", -26, 4)
@@ -249,7 +251,7 @@ local function build()
   grip:SetScript("OnMouseDown", function() frame:StartSizing("BOTTOMRIGHT") end)
   grip:SetScript("OnMouseUp", function()
     frame:StopMovingOrSizing()
-    local db = NS.DB()
+    local db = BookOfDogsDB
     db.ui = db.ui or {}
     db.ui.w, db.ui.h = math.floor(frame:GetWidth() + 0.5), math.floor(frame:GetHeight() + 0.5)
   end)
@@ -279,6 +281,7 @@ end
 function NS.ShowVoters(owner, id)
   local e, ups, downs = votersOf(id)
   if not e then return end
+  local revision = NS.FeedRevision
   local title = NS.ColorName(e.f or e.n, e.c) .. "  (" .. ((e.s or 0) > 0 and "+" or "") .. (e.s or 0) .. ")"
   if MenuUtil and MenuUtil.CreateContextMenu then
     MenuUtil.CreateContextMenu(owner, function(_, root)
@@ -297,13 +300,17 @@ function NS.ShowVoters(owner, id)
       if NS.CanDelete() then
         root:CreateDivider()
         local sub = root:CreateButton("Set class")
-        local function set(c) NS.Edit(id, e.f or e.n, e.g or "", e.d or "", c) end
+        local function set(c)
+          if revision == NS.FeedRevision then NS.Edit(id, e.f or e.n, e.g or "", e.d or "", c) end
+        end
         for _, c in ipairs(NS.CLASSES) do
           if NS.ValidClass(c) then
             sub:CreateButton(NS.ColorName(NS.ClassName(c), c) .. (e.c == c and "  |cffffffff(current)|r" or ""), function() set(c) end)
           end
         end
-        root:CreateButton("Edit entry...", function() NS.OpenEditor(id) end)
+        root:CreateButton("Edit entry...", function()
+          if revision == NS.FeedRevision then NS.OpenEditor(id) end
+        end)
       end
     end)
     return
@@ -440,12 +447,14 @@ local function buildEditor()
     -- new entry: look the player up with /who for their class (and guild if left blank)
     if editor.busy then return end
     editor.busy = true; save:SetText("Looking up..."); save:Disable()
+    local revision = NS.FeedRevision
     NS.WhoLookup(NS.Clean(n, 60), function(info)
       editor.busy = false; save:SetText(SAVE or "Save"); save:Enable()
+      if revision ~= NS.FeedRevision or not NS.InGuildFeed() then return end
       local class = editor.class or (info and info.class)
       if g == "" and info and info.guild then g = info.guild end
-      if info and info.guild and info.guild:lower() == NS.GUILD then
-        print("|cff" .. NS.GOLD .. "Book of Dogs|r: |cffff5555" .. n .. " is in <Dog> and can't be added.|r")
+      if NS.IsGuildmate(n, g) then
+        print("|cff" .. NS.GOLD .. "Book of Dogs|r: |cffff5555" .. n .. " is in your guild and can't be added.|r")
         return
       end
       if info then
@@ -529,11 +538,19 @@ function NS.OpenEditors()
 end
 
 StaticPopupDialogs.BOOKOFDOGS_DELETE = {
-  text = "Remove |cffffffff%s|r from the Book of Dogs for the whole guild?",
+  text = "Remove |cffffffff%s|r from this feed?",
   button1 = DELETE or "Delete", button2 = CANCEL,
   timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
   OnAccept = function(_, id) NS.Delete(id) end,
 }
+
+function NS.CloseFeedDialogs()
+  if editor then editor:Hide() end
+  if edWin then edWin:Hide() end
+  if frame then frame:Hide(); search:SetText("") end
+  StaticPopup_Hide("BOOKOFDOGS_ADD")
+  StaticPopup_Hide("BOOKOFDOGS_DELETE")
+end
 
 -- open the Book searched to one player
 function NS.ShowEntry(text)

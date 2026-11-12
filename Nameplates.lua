@@ -14,7 +14,7 @@ local function size() return (BookOfDogsDB and BookOfDogsDB.npSize) or DEF_SIZE 
 local function yoff() return (BookOfDogsDB and BookOfDogsDB.npY) or DEF_Y end
 
 local function isDog(unit)
-  if not unit or not UnitExists(unit) or not UnitIsPlayer(unit) or not NS.DB() then return false end
+  if not unit or not UnitExists(unit) or not UnitIsPlayer(unit) or not NS.InGuildFeed() then return false end
   local name, second = UnitName(unit)
   if not name or secret(name) or secret(second) then return false end
   return #NS.FindEntries(NS.Key(name), NS.FullFrom(name, second)) > 0
