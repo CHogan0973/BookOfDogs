@@ -185,10 +185,10 @@ handlers.L = function(sender, list)
   for name, v, m in (list or ""):gmatch("([^,=]+)=(%d):(%d+)") do NS.ApplyEditor(name, v, m) end
 end
 -- an admin's edit of an existing entry
-handlers.E = function(sender, id, m, n, g, d)
+handlers.E = function(sender, id, m, n, g, d, class)
   if not NS.CanDelete(sender) then return end
   local e = NS.DB().e[id]; if not e or e.x then return end
-  NS.ApplyEntry(id, e.t, m, n, g, e.a, d, "", true, NS.senderDisplay or sender)
+  NS.ApplyEntry(id, e.t, m, n, g, e.a, d, "", true, NS.senderDisplay or sender, class ~= "" and class or nil)
 end
 handlers.V = function(sender, id, val, m) NS.ApplyVote(id, sender, val, m) end
 handlers.W = function(sender, id, m, list)

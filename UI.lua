@@ -38,10 +38,11 @@ local function refresh()
       if s > 0 then r.score:SetTextColor(0.3, 1, 0.3) elseif s < 0 then r.score:SetTextColor(1, 0.4, 0.4) else r.score:SetTextColor(0.8, 0.8, 0.8) end
       local mine = e.v and e.v[me]
       setVoted(r.up, mine == 1); setVoted(r.down, mine == -1)
-      local name = e.f or e.n
-      local color = e.c and RAID_CLASS_COLORS and RAID_CLASS_COLORS[e.c]
-      if color and color.colorStr then name = "|c" .. color.colorStr .. name .. "|r" end
-      r.name:SetText(name .. (e.g and ("  |cff40c040<" .. e.g .. ">|r") or ""))
+      -- name in class color, then the class, then the guild
+      local cls = NS.ClassName(e.c)
+      r.name:SetText(NS.ColorName(e.f or e.n, e.c)
+        .. (cls and ("  " .. NS.ColorName(cls, e.c)) or "")
+        .. (e.g and ("  |cff40c040<" .. e.g .. ">|r") or ""))
       r.desc:SetText(e.d or "")
       r.by:SetText(("added by %s  ·  %s%s"):format(NS.Display(e.a or "?"), ago(e.t), e.ed and ("  ·  edited by " .. NS.Display(e.ed)) or ""))
       r.del:SetShown(canDel); r.edit:SetShown(canDel)
@@ -156,7 +157,8 @@ local function build()
     r:SetScript("OnEnter", function(self)
       local e = self.id and NS.DB().e[self.id]; if not e then return end
       GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-      GameTooltip:SetText((e.f or e.n) .. (e.g and (" <" .. e.g .. ">") or ""), 1, 0.82, 0)
+      GameTooltip:SetText(NS.ColorName(e.f or e.n, e.c) .. (e.g and (" |cff40c040<" .. e.g .. ">|r") or ""), 1, 0.82, 0)
+      if NS.ClassName(e.c) then GameTooltip:AddLine(NS.ColorName(NS.ClassName(e.c), e.c)) end
       GameTooltip:AddLine(e.d or "", 1, 1, 1, true)
       local up, down = 0, 0
       if e.v then for _, v in pairs(e.v) do if v > 0 then up = up + 1 else down = down + 1 end end end
@@ -267,7 +269,7 @@ end
 local function buildEditor()
   local ok, f = pcall(CreateFrame, "Frame", "BookOfDogsEditor", UIParent, "BackdropTemplate")
   editor = f
-  editor:SetSize(400, 230); editor:SetPoint("CENTER", 0, 80)
+  editor:SetSize(400, 270); editor:SetPoint("CENTER", 0, 80)
   editor:SetFrameStrata("DIALOG"); editor:SetToplevel(true); editor:EnableMouse(true)
   editor:SetMovable(true); editor:RegisterForDrag("LeftButton")
   editor:SetScript("OnDragStart", editor.StartMoving); editor:SetScript("OnDragStop", editor.StopMovingOrSizing)
@@ -278,6 +280,32 @@ local function buildEditor()
   editor.name = field(editor, "Name (Name or Name-Realm)", -46, 220, 60)
   editor.guild = field(editor, "Guild (optional)", -86, 220, 40)
   editor.desc = field(editor, "Description (max " .. NS.MAXDESC .. ")", -126, 340, NS.MAXDESC)
+  -- class picker: click to choose (sets the name color in the Book)
+  local cl = editor:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  cl:SetPoint("TOPLEFT", 22, -166); cl:SetText("Class")
+  local pick = CreateFrame("Button", nil, editor, "UIPanelButtonTemplate")
+  pick:SetSize(150, 22); pick:SetPoint("TOPLEFT", 24, -180)
+  editor.classBtn = pick
+  function editor.setClass(c)
+    editor.class = NS.ValidClass(c) and c or nil
+    local n = NS.ClassName(editor.class)
+    pick:SetText(n and NS.ColorName(n, editor.class) or "Unknown")
+  end
+  pick:SetScript("OnClick", function(self)
+    if MenuUtil and MenuUtil.CreateContextMenu then
+      MenuUtil.CreateContextMenu(self, function(_, root)
+        root:CreateTitle("Class")
+        root:CreateButton("Unknown", function() editor.setClass(nil) end)
+        for _, c in ipairs(NS.CLASSES) do
+          if NS.ValidClass(c) then root:CreateButton(NS.ColorName(NS.ClassName(c), c), function() editor.setClass(c) end) end
+        end
+      end)
+    else -- no menus on this client: cycle through the classes
+      local i = 0
+      for k, c in ipairs(NS.CLASSES) do if c == editor.class then i = k end end
+      editor.setClass(NS.CLASSES[i + 1])
+    end
+  end)
   editor.name:SetScript("OnTabPressed", function() editor.guild:SetFocus() end)
   editor.guild:SetScript("OnTabPressed", function() editor.desc:SetFocus() end)
   editor.desc:SetScript("OnTabPressed", function() editor.name:SetFocus() end)
@@ -290,8 +318,8 @@ local function buildEditor()
     local n, g, d = editor.name:GetText(), editor.guild:GetText(), editor.desc:GetText()
     if NS.Clean(n) == "" or NS.Clean(d) == "" then UIErrorsFrame:AddMessage("Name and description are required.", 1, 0.1, 0.1) return end
     local done
-    if editor.id then done = NS.Edit(editor.id, n, g, d)
-    else done = NS.Add(n, nil, g, d, nil, true) end
+    if editor.id then done = NS.Edit(editor.id, n, g, d, editor.class)
+    else done = NS.Add(n, nil, g, d, nil, true, editor.class) end
     if done then editor:Hide() end
   end
   save:SetScript("OnClick", submit)
@@ -306,6 +334,7 @@ function NS.OpenEditor(id)
   editor.id = e and id or nil
   editor.title:SetText(e and "Edit entry" or "New entry")
   editor.name:SetText(e and (e.f or e.n) or ""); editor.guild:SetText(e and e.g or ""); editor.desc:SetText(e and e.d or "")
+  editor.setClass(e and e.c)
   editor:Show(); editor.name:SetFocus()
 end
 

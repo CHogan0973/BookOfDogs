@@ -349,8 +349,29 @@ function NS.Add(name, realm, guild, desc, full, manual, class)
   return id
 end
 
+-- classes: the game's own tokens, colors and names
+NS.CLASSES = {"WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "SHAMAN", "MAGE", "WARLOCK", "DRUID"}
+function NS.ValidClass(c) return type(c) == "string" and RAID_CLASS_COLORS ~= nil and RAID_CLASS_COLORS[c] ~= nil end
+-- "ffRRGGBB" for a class (built from r/g/b if the game's table has no colorStr)
+function NS.ClassColor(c)
+  local col = NS.ValidClass(c) and RAID_CLASS_COLORS[c]
+  if not col then return nil end
+  if col.colorStr then return col.colorStr end
+  return string.format("ff%02x%02x%02x", (col.r or 1) * 255, (col.g or 1) * 255, (col.b or 1) * 255)
+end
+function NS.ClassName(c)
+  if not NS.ValidClass(c) then return nil end
+  local n = (LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[c])
+  return n or (c:sub(1, 1) .. c:sub(2):lower())
+end
+-- "Name" in class color (plain when the class isn't known)
+function NS.ColorName(name, c)
+  local hex = NS.ClassColor(c)
+  return hex and ("|c" .. hex .. name .. "|r") or name
+end
+
 -- admins (GM, officers, CHogan) can edit any entry; votes are kept
-function NS.Edit(id, name, guild, desc)
+function NS.Edit(id, name, guild, desc, class)
   local e = db.e[id]
   if not e or e.x or not NS.CanDelete() then return end
   name, guild, desc = NS.Clean(name, 60), NS.Clean(guild, 40), NS.Clean(desc, NS.MAXDESC)
@@ -360,8 +381,9 @@ function NS.Edit(id, name, guild, desc)
   if NS.Blocked(desc) or NS.Blocked(name) or NS.Blocked(guild) then return no("that has language that isn't allowed in the Book.") end
   local m = math.max(now(), (e.m or 0) + 1)
   -- the full name is dropped on edit: the name field is what shows
-  if NS.ApplyEntry(id, e.t, m, name, guild, e.a, desc, "", true, NS.Display(NS.MyId())) then
-    NS.Send(table.concat({"E", id, m, name, guild, desc}, "\t"))
+  if not NS.ValidClass(class) then class = nil end
+  if NS.ApplyEntry(id, e.t, m, name, guild, e.a, desc, "", true, NS.Display(NS.MyId()), class) then
+    NS.Send(table.concat({"E", id, m, name, guild, desc, class or ""}, "\t"))
   end
   return true
 end
