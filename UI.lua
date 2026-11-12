@@ -2,8 +2,15 @@
 -- wears the Forever UI skin. Built the first time it's opened; a handful of row
 -- frames are reused while scrolling, and nothing runs while it's closed.
 local ADDON, NS = ...
-local ROWS, ROWH, W, H = 7, 66, 600, 620
-local frame, rows, scroll, search, countText, list
+local ROWH, W, H = 66, 600, 620
+local MAXROWS = 20                 -- row frames built; how many show depends on the window height
+local MINW, MINH, MAXW = 580, 280, 1100
+local INSET_PAD = 8                -- space above the first row and below the last (inside the inset)
+local SCROLLBAR_W = 28             -- room the scroll bar takes on the right when it is showing
+local CHROME_H = 66 + 32           -- inset's top + bottom offsets inside the window
+local MAXH = MAXROWS * ROWH + INSET_PAD + CHROME_H
+local frame, rows, scroll, search, countText, list, inset
+local visibleRows = 1
 
 local function ago(t)
   local d = GetServerTime() - (t or 0)
@@ -22,14 +29,18 @@ local function refresh()
   if not frame or not frame:IsShown() then return end
   list = NS.Sorted(search:GetText())
   countText:SetText(#list .. (#list == 1 and " entry" or " entries"))
-  FauxScrollFrame_Update(scroll, #list, ROWS, ROWH)
+  visibleRows = math.min(MAXROWS, math.max(1, math.floor((frame:GetHeight() - CHROME_H - INSET_PAD) / ROWH)))
+  local showBar = FauxScrollFrame_Update(scroll, #list, visibleRows, ROWH)
   local off = FauxScrollFrame_GetOffset(scroll)
+  -- rows fill the full width unless the scroll bar is showing
+  local rightPad = showBar and SCROLLBAR_W or 4
   local me, canDel = NS.MyId(), NS.CanDelete()
   if frame.newBtn then frame.newBtn:SetShown(canDel) end
   if frame.edBtn then frame.edBtn:SetShown(NS.IsMainAdmin()) end
-  for i = 1, ROWS do
+  for i = 1, MAXROWS do
     local r, id = rows[i], list[off + i]
-    local e = id and NS.DB().e[id]
+    local e = i <= visibleRows and id and NS.DB().e[id]
+    r:SetPoint("RIGHT", inset, "RIGHT", -rightPad, 0)
     if e then
       local s = e.s or 0
       r.id = id
@@ -92,9 +103,14 @@ local function shell()
 end
 
 local function build()
-  local inset
   frame, inset = shell()
-  frame:SetSize(W, H); frame:ClearAllPoints(); frame:SetPoint("CENTER")
+  local saved = NS.DB().ui or {}
+  frame:SetSize(math.max(MINW, math.min(MAXW, saved.w or W)), math.max(MINH, math.min(MAXH, saved.h or H)))
+  frame:ClearAllPoints(); frame:SetPoint("CENTER")
+  -- resizable: the grip in the bottom-right corner; the rows re-fit as the window changes
+  frame:SetResizable(true)
+  if frame.SetResizeBounds then frame:SetResizeBounds(MINW, MINH, MAXW, MAXH)
+  elseif frame.SetMinResize then frame:SetMinResize(MINW, MINH); frame:SetMaxResize(MAXW, MAXH) end
   frame:SetFrameStrata("HIGH"); frame:SetToplevel(true); frame:SetClampedToScreen(true)
   frame:SetMovable(true); frame:EnableMouse(true); frame:RegisterForDrag("LeftButton")
   frame:SetScript("OnDragStart", frame.StartMoving); frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
@@ -115,9 +131,9 @@ local function build()
   scroll:SetScript("OnVerticalScroll", function(self, off) FauxScrollFrame_OnVerticalScroll(self, off, ROWH, refresh) end)
 
   rows = {}
-  for i = 1, ROWS do
+  for i = 1, MAXROWS do
     local r = CreateFrame("Frame", nil, inset)
-    r:SetHeight(ROWH); r:SetPoint("TOPLEFT", 4, -4 - (i - 1) * ROWH); r:SetPoint("RIGHT", inset, "RIGHT", -28, 0)
+    r:SetHeight(ROWH); r:SetPoint("TOPLEFT", 4, -4 - (i - 1) * ROWH); r:SetPoint("RIGHT", inset, "RIGHT", -4, 0)
     if i % 2 == 0 then local bg = r:CreateTexture(nil, "BACKGROUND"); bg:SetAllPoints(); bg:SetColorTexture(1, 1, 1, 0.03) end
     local hl = r:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints()
     hl:SetTexture("Interface\\FriendsFrame\\UI-FriendsFrame-HighlightBar-Blue"); hl:SetBlendMode("ADD"); hl:SetAlpha(0.6)
@@ -182,7 +198,7 @@ local function build()
   credit:SetPoint("RIGHT", search, "LEFT", -12, 0); credit:SetText("Created by CHogan")
 
   local sync = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-  sync:SetSize(80, 22); sync:SetPoint("BOTTOMRIGHT", -8, 5); sync:SetText("Sync")
+  sync:SetSize(80, 22); sync:SetPoint("BOTTOMRIGHT", -24, 5); sync:SetText("Sync")
   sync:SetScript("OnClick", function() NS.RequestSync(true) end)
   sync:SetScript("OnEnter", function(self) GameTooltip:SetOwner(self, "ANCHOR_TOP"); GameTooltip:SetText("Sync"); GameTooltip:AddLine("Ask online guildmates for the whole book.", 1, 1, 1, true); GameTooltip:Show() end)
   sync:SetScript("OnLeave", GameTooltip_Hide)
@@ -208,6 +224,23 @@ local function build()
   eb:SetScript("OnEnter", function(self) GameTooltip:SetOwner(self, "ANCHOR_TOP"); GameTooltip:SetText("Editors"); GameTooltip:AddLine("Give guild members edit and delete rights.", 1, 1, 1, true); GameTooltip:Show() end)
   eb:SetScript("OnLeave", GameTooltip_Hide)
   frame.edBtn = eb
+
+  local grip = CreateFrame("Button", nil, frame)
+  grip:SetSize(16, 16); grip:SetPoint("BOTTOMRIGHT", -4, 4); grip:SetFrameLevel(frame:GetFrameLevel() + 10)
+  grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+  grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+  grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+  grip:SetScript("OnMouseDown", function() frame:StartSizing("BOTTOMRIGHT") end)
+  grip:SetScript("OnMouseUp", function()
+    frame:StopMovingOrSizing()
+    local db = NS.DB()
+    db.ui = db.ui or {}
+    db.ui.w, db.ui.h = math.floor(frame:GetWidth() + 0.5), math.floor(frame:GetHeight() + 0.5)
+  end)
+  grip:SetScript("OnEnter", function(self) GameTooltip:SetOwner(self, "ANCHOR_LEFT"); GameTooltip:SetText("Drag to resize"); GameTooltip:Show() end)
+  grip:SetScript("OnLeave", GameTooltip_Hide)
+  -- the list's height changes with the window, so re-fit the rows (and the scroll bar) when it does
+  frame:HookScript("OnSizeChanged", function() refresh() end)
 
   frame:SetScript("OnShow", function() PlaySound(SOUNDKIT and SOUNDKIT.IG_SPELLBOOK_OPEN or 829); refresh() end)
   frame:SetScript("OnHide", function() PlaySound(SOUNDKIT and SOUNDKIT.IG_SPELLBOOK_CLOSE or 830) end)
