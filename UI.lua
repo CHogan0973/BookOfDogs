@@ -39,8 +39,15 @@ local function refresh()
       local mine = e.v and e.v[me]
       setVoted(r.up, mine == 1); setVoted(r.down, mine == -1)
       local name = e.f or e.n
-      local color = e.c and RAID_CLASS_COLORS and RAID_CLASS_COLORS[e.c]
-      if color and color.colorStr then name = "|c" .. color.colorStr .. name .. "|r" end
+      local color = NS.ClassColor(e.c)
+      if color and color.WrapTextInColorCode then
+        name = color:WrapTextInColorCode(name)
+      elseif color and color.colorStr then
+        name = "|c" .. color.colorStr .. name .. "|r"
+      elseif color and color.r and color.g and color.b then
+        local function byte(value) return math.floor(value * 255 + 0.5) end
+        name = ("|cff%02x%02x%02x%s|r"):format(byte(color.r), byte(color.g), byte(color.b), name)
+      end
       r.name:SetText(name .. (e.g and ("  |cff40c040<" .. e.g .. ">|r") or ""))
       r.desc:SetText(e.d or "")
       r.by:SetText(("added by %s  ·  %s%s"):format(NS.Display(e.a or "?"), ago(e.t), e.ed and ("  ·  edited by " .. NS.Display(e.ed)) or ""))

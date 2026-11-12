@@ -246,16 +246,20 @@ end
 -- ids are short hex strings; anything else is ignored
 function NS.ValidId(id) return type(id) == "string" and #id <= 12 and id:match("^%x+$") ~= nil end
 
+function NS.ClassColor(class)
+  if (issecretvalue and issecretvalue(class)) or type(class) ~= "string" then return end
+  local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
+  if color then return color end
+  if C_ClassColor and C_ClassColor.GetClassColor then return C_ClassColor.GetClassColor(class) end
+end
+
 -- canEdit: may this change an existing entry? (admin edits, or a sync reply)
 -- ed: who last edited it
 -- canFillClass: a live announcement from the author can fill a missing class
 function NS.ApplyEntry(id, t, m, n, g, a, d, f, canEdit, ed, class, canFillClass)
   t, m = tonumber(t) or 0, tonumber(m) or 0
   ed = ed and NS.Clean(ed, 60) or ""
-  if (issecretvalue and issecretvalue(class)) or type(class) ~= "string"
-     or not (RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]) then
-    class = nil
-  end
+  if not NS.ClassColor(class) then class = nil end
   if not NS.ValidId(id) then return false end
   -- everything from the network is cleaned and length-capped before it is stored or shown
   n, g, a, f = NS.Clean(n, 60), NS.Clean(g, 40), NS.Clean(a, 60), NS.Clean(f, 40)

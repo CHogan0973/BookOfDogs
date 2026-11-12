@@ -108,7 +108,13 @@ if Menu and Menu.ModifyMenu then
     if not NS.InDog() or not ctx then return end
     local unit, name, realm = ctx.unit, ctx.name, ctx.server
     if unit and not UnitIsPlayer(unit) then return end
-    if unit and name == nil then name, realm = UnitName(unit) end
+    if secret(name) or secret(realm) then return end
+    -- Blizzard's unit menus can provide a name without the unit's realm.
+    if unit then
+      local unitName, unitRealm = UnitName(unit)
+      if not name then name = unitName end
+      if not realm or realm == "" then realm = unitRealm end
+    end
     if secret(name) or secret(realm) or not name or name == "" then return end
     local guid = unit and UnitGUID(unit)
     local g = unit and GetGuildInfo(unit)
