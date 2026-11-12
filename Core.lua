@@ -114,7 +114,7 @@ function NS.InDog()
 end
 
 local rankOf, officerRank = {}, {}
-local firstCount, rosterHasSurnames = {}, false
+local firstCount, rosterHasSurnames, rosterReady = {}, false, false
 -- guild rank for an id, or nil if not in the guild
 local function rankFor(id)
   if not id then return nil end
@@ -145,13 +145,16 @@ end
 function NS.ScanRoster()
   wipe(rankOf); wipe(firstCount); rosterHasSurnames = false
   local n = GetNumGuildMembers and GetNumGuildMembers() or 0
+  rosterReady = n > 0
   for i = 1, n do
     local full, _, rankIndex = GetGuildRosterInfo(i)
-    if full then
-      local id = NS.Id(full)
+    local id = full and NS.Id(full)
+    if id and rankIndex ~= nil then
       rankOf[id] = rankIndex; NS.LearnName(full)
       if (id:match("^[^%-]+") or ""):find(" ") then rosterHasSurnames = true end
       local f = firstId(id); firstCount[f] = (firstCount[f] or 0) + 1
+    else
+      rosterReady = false
     end
   end
   wipe(officerRank)
@@ -167,17 +170,51 @@ function NS.IsMainAdmin(who) return NS.ADMINS[base(who or NS.MyFull())] == true 
 
 -- editors: guild members the main admin has given edit/delete rights
 -- db.ed[name] = {v = 1 (editor) or 0 (removed), m = when}
-function NS.IsEditor(who) local id = NS.Id(who); local r = id and db and db.ed and db.ed[id]; return r ~= nil and r.v == 1 end
+local function editorId(name)
+  local id = NS.Id(name)
+  if not id or id:match("^[^%-]+"):find(" ", 1, true) or not rosterReady then return id end
+  -- Older clients stored the first name or the full name without spaces.
+  -- Keep the original record until the roster identifies exactly one match.
+  local match
+  for member in pairs(rankOf) do
+    local memberName, realm = member:match("^([^%-]+)%-(.*)$")
+    if firstId(member) == id or memberName:gsub(" ", "") .. "-" .. realm == id then
+      if match then return id end
+      match = member
+    end
+  end
+  return match or id
+end
+
+local function editorUpdateWins(v, m, previous)
+  return not previous or m > previous.m or (m == previous.m and v == 0 and previous.v == 1)
+end
+
+function NS.IsEditor(who)
+  local id = NS.Id(who)
+  local r = id and db and db.ed and db.ed[id]
+  if not r or r.v ~= 1 then return false end
+  if id:match("^[^%-]+"):find(" ", 1, true) then return true end
+  -- Single-name characters are valid on Classic. An unresolved Forever alias
+  -- must never grant rights to someone who only shares the first name.
+  return rosterReady and not rosterHasSurnames and rankOf[id] ~= nil
+         and not (RegionalUniqueNamesEnabled and RegionalUniqueNamesEnabled())
+end
 function NS.Editors()
   local out = {}
-  for id, r in pairs(db.ed) do if r.v == 1 then out[#out + 1] = NS.Display(id) end end
+  for id, r in pairs(db.ed) do
+    if r.v == 1 then
+      local name, realm = id:match("^([^%-]+)%-(.*)$")
+      out[#out + 1] = realm == NS.MyRealm() and name or id
+    end
+  end
   table.sort(out); return out
 end
 function NS.ApplyEditor(name, v, m)
-  name = NS.Canon(NS.Clean(name, 60)); v = tonumber(v) == 1 and 1 or 0; m = tonumber(m) or 0
+  name = editorId(NS.Clean(name, 60)); v = tonumber(v) == 1 and 1 or 0; m = tonumber(m) or 0
   if not name or name:find("[,=:]") then return false end
   local r = db.ed[name]
-  if r and r.m >= m then return false end
+  if not editorUpdateWins(v, m, r) then return false end
   db.ed[name] = {v = v, m = m}
   if m > (db.maxM or 0) then db.maxM = m end
   NS.Changed(); return true
@@ -201,6 +238,7 @@ function NS.SetEditor(name, on)
     print("|cff" .. NS.GOLD .. "Book of Dogs|r: |cffff5555" .. NS.Clean(name, 60) .. " isn't in <Dog>. Check the spelling.|r")
     return
   end
+  key = editorId(key)
   local m = math.max(now(), ((db.ed[key] or {}).m or 0) + 1)
   if NS.ApplyEditor(key, on and 1 or 0, m) then
     NS.Send(table.concat({"G", key, on and 1 or 0, m}, "\t"))
@@ -527,8 +565,9 @@ function NS.Normalize()
   if db.ed then
     local merged = {}
     for who, r in pairs(db.ed) do
-      local k = (tostring(who):match("^[^%-]+") or ""):find(" ") and NS.Id(who) or nil
-      if k and (not merged[k] or merged[k].m < r.m) then merged[k] = r end
+      local k = editorId(who)
+      if k and editorUpdateWins(r.v, r.m, merged[k]) then merged[k] = r end
+      bump(r.m)
     end
     db.ed = merged
   end
