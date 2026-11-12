@@ -2,8 +2,7 @@
 ## Title: |cffffcc33Book of Dogs|r
 ## Notes: The guild Dog's book of notable players: add anyone from their right-click menu, vote them up or down. /dogs
 ## Author: CHogan
-## Version: 75.0
-## Version: 74.0.1
+## Version: 74.0.2
 ## SavedVariables: BookOfDogsDB
 ## IconTexture: Interface\AddOns\BookOfDogs\dog
 
