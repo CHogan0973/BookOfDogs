@@ -187,6 +187,23 @@ end
 
 function NS.FeedName() return activeSeed end
 
+function NS.FeedLabel(seed)
+  local profile = activeGuild and BookOfDogsDB.feeds[activeGuild]
+  return profile and profile.labels and profile.labels[seed or activeSeed]
+end
+
+function NS.SetFeedLabel(label)
+  if not NS.InGuildFeed() then return false, "Join a guild to label a feed." end
+  label = NS.Clean(label)
+  local _, length = label:gsub("[^\128-\191]", "")
+  if length > 32 then return false, "Enter a label of up to 32 characters." end
+  local profile = BookOfDogsDB.feeds[activeGuild]
+  profile.labels = profile.labels or {}
+  profile.labels[activeSeed] = label ~= "" and label or nil
+  NS.Changed()
+  return true
+end
+
 function NS.FeedChoices()
   if not NS.InGuildFeed() then return {} end
   local seeds = {}
