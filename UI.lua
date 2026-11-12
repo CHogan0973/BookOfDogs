@@ -163,7 +163,7 @@ local function build()
       local up, down = 0, 0
       if e.v then for _, v in pairs(e.v) do if v > 0 then up = up + 1 else down = down + 1 end end end
       GameTooltip:AddLine(("%d up  ·  %d down"):format(up, down), 0.7, 0.7, 0.7)
-      GameTooltip:AddLine("Right-click to see who voted", 0.5, 0.5, 0.5)
+      GameTooltip:AddLine(NS.CanDelete() and "Right-click: who voted, set class" or "Right-click to see who voted", 0.5, 0.5, 0.5)
       GameTooltip:Show()
     end)
     r:SetScript("OnLeave", GameTooltip_Hide)
@@ -230,7 +230,7 @@ end
 function NS.ShowVoters(owner, id)
   local e, ups, downs = votersOf(id)
   if not e then return end
-  local title = (e.f or e.n) .. "  (" .. ((e.s or 0) > 0 and "+" or "") .. (e.s or 0) .. ")"
+  local title = NS.ColorName(e.f or e.n, e.c) .. "  (" .. ((e.s or 0) > 0 and "+" or "") .. (e.s or 0) .. ")"
   if MenuUtil and MenuUtil.CreateContextMenu then
     MenuUtil.CreateContextMenu(owner, function(_, root)
       root:CreateTitle(title)
@@ -243,6 +243,18 @@ function NS.ShowVoters(owner, id)
       if #downs > 0 then
         root:CreateTitle("|cffff5050Voted down (" .. #downs .. ")|r")
         for _, n in ipairs(downs) do root:CreateTitle("|cffffffff" .. n .. "|r") end
+      end
+      -- admins and editors: quick class change, and the full editor
+      if NS.CanDelete() then
+        root:CreateDivider()
+        local sub = root:CreateButton("Set class")
+        local function set(c) NS.Edit(id, e.f or e.n, e.g or "", e.d or "", c) end
+        for _, c in ipairs(NS.CLASSES) do
+          if NS.ValidClass(c) then
+            sub:CreateButton(NS.ColorName(NS.ClassName(c), c) .. (e.c == c and "  |cffffffff(current)|r" or ""), function() set(c) end)
+          end
+        end
+        root:CreateButton("Edit entry...", function() NS.OpenEditor(id) end)
       end
     end)
     return
