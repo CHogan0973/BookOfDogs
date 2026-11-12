@@ -226,3 +226,38 @@ if Menu and Menu.ModifyMenu then
   end
   for _, tag in ipairs(tags) do pcall(Menu.ModifyMenu, tag, add) end
 end
+
+-- /dogs debug: what the game tells the addon about your target (for troubleshooting)
+function NS.DebugTarget()
+  local u = "target"
+  local function show(label, ok, ...)
+    local parts = {}
+    for i = 1, select("#", ...) do
+      local v = select(i, ...)
+      parts[#parts + 1] = secret(v) and "<secret>" or tostring(v)
+    end
+    print(("|cff%sBoD debug|r %s: %s"):format(NS.GOLD, label, ok and table.concat(parts, ", ") or "<error>"))
+  end
+  if not UnitExists(u) then print("Book of Dogs: target a player first."); return end
+  show("UnitName", pcall(UnitName, u))
+  show("GetUnitName(false)", pcall(GetUnitName, u, false))
+  show("GetUnitName(true)", pcall(GetUnitName, u, true))
+  if UnitFullName then show("UnitFullName", pcall(UnitFullName, u)) end
+  if UnitPVPName then show("UnitPVPName", pcall(UnitPVPName, u)) end
+  show("UnitClass", pcall(UnitClass, u))
+  show("GetGuildInfo", pcall(GetGuildInfo, u))
+  show("UnitGUID", pcall(UnitGUID, u))
+  show("UnitIsPlayer / Faction", pcall(function() return UnitIsPlayer(u), UnitFactionGroup(u) end))
+  local fs = TargetFrame and (TargetFrame.name or (TargetFrame.TargetFrameContent and TargetFrame.TargetFrameContent.TargetFrameContentMain
+             and TargetFrame.TargetFrameContent.TargetFrameContentMain.Name))
+  show("TargetFrame name", pcall(function() return fs and fs:GetText() end))
+  if C_TooltipInfo and C_TooltipInfo.GetUnit then
+    local ok, data = pcall(C_TooltipInfo.GetUnit, u)
+    for i = 1, 3 do
+      local l = ok and data and data.lines and data.lines[i]
+      if l then show("Tooltip line " .. i, true, l.leftText) end
+    end
+  end
+  local name = UnitName(u)
+  show("fullName() result", true, fullName(u, (not secret(name)) and name or nil))
+end

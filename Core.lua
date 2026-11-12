@@ -557,6 +557,8 @@ SlashCmdList.BOOKOFDOGS = function(msg)
     wipe(db.e); db.maxM = 0; NS.dirty = true; NS.Changed()
     print("|cff" .. NS.GOLD .. "Book of Dogs|r: cleared your copy; pulling the whole book from guildmates online...")
     NS.RequestSync(true)
+  elseif msg == "debug" then
+    NS.DebugTarget()
   elseif msg == "minimap" then
     NS.ToggleMinimap()
   elseif msg == "add" then
