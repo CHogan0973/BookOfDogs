@@ -6,12 +6,39 @@ local function secret(value)
 end
 
 local function fullName(unit, short)
-  if not (unit and C_TooltipInfo and C_TooltipInfo.GetUnit) then return nil end
-  local ok, data = pcall(C_TooltipInfo.GetUnit, unit)
-  local line = ok and data and data.lines and data.lines[1] and data.lines[1].leftText
-  if type(line) ~= "string" or secret(line) then return nil end
-  line = NS.Clean(line, 40)
-  if line ~= short and line:find(short, 1, true) then return line end
+  if not unit or not short then return nil end
+  local function ok(v)
+    if type(v) ~= "string" or secret(v) then return nil end
+    v = NS.Clean((v:match("^[^%-]+") or v), 40)
+    -- the full name starts with the first name and adds a surname
+    if v ~= short and v:find(short, 1, true) == 1 and v:find(" ", 1, true) then return v end
+  end
+  -- what the unit frames show ("Laquai Eudora"); works for both factions
+  if GetUnitName then
+    local f = ok((pcall(GetUnitName, unit, false)) and GetUnitName(unit, false))
+    if f then return f end
+  end
+  -- the target frame's own name text
+  if unit == "target" and TargetFrame then
+    local fs = TargetFrame.name or (TargetFrame.TargetFrameContent and TargetFrame.TargetFrameContent.TargetFrameContentMain
+               and TargetFrame.TargetFrameContent.TargetFrameContentMain.Name)
+    local f = fs and fs.GetText and ok(fs:GetText())
+    if f then return f end
+  end
+  -- the unit's tooltip
+  if C_TooltipInfo and C_TooltipInfo.GetUnit then
+    local okc, data = pcall(C_TooltipInfo.GetUnit, unit)
+    local lines = okc and data and data.lines
+    if lines then
+      for i = 1, math.min(#lines, 2) do
+        local t = lines[i] and lines[i].leftText
+        if type(t) == "string" and not secret(t) then
+          local f = t:find(short, 1, true) and ok(t:match("(" .. short:gsub("%p", "%%%0") .. "%s+%S+)"))
+          if f then return f end
+        end
+      end
+    end
+  end
 end
 
 local function matchesPlayer(unit, key)
@@ -91,7 +118,8 @@ function NS.ShowAddPopup(unit, name, realm)
   end
   local data = {name = name, realm = realm, guild = guildOf(unit, key), full = fullName(unit, name),
                 class = unit and select(2, UnitClass(unit))}
-  if not NS.ValidClass(data.class) then data.class = nil end
+  if secret(data.class) or not NS.ValidClass(data.class) then data.class = nil end
+  if secret(data.guild) then data.guild = "" end
   -- a name typed or clicked with a surname already in it is the full name
   if not data.full and name:find(" ", 1, true) then data.full = name end
 
@@ -189,7 +217,10 @@ if Menu and Menu.ModifyMenu then
     end
     root:CreateButton("|cffffcc33Add to Book of Dogs|r", function()
       local current = unit and UnitGUID(unit)
-      local sameUnit = not secret(guid) and not secret(current) and guid and current == guid
+      -- still the same player? (GUIDs can be hidden for the other faction; fall back to the name)
+      local sameUnit
+      if guid and current and not secret(guid) and not secret(current) then sameUnit = current == guid
+      else sameUnit = unit ~= nil and UnitExists(unit) and not secret(UnitName(unit)) and UnitName(unit) == name end
       NS.ShowAddPopup(sameUnit and unit or nil, name, realm)
     end)
   end
