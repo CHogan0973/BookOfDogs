@@ -23,6 +23,6 @@ Use **Rename current feed…** to give a feed a local label. The picker shows th
 The original Dog default feed keeps its existing book, admin, older-client sync, and guild-chat announcements. Other feeds require this version and sync through addon messages. A seed selects a feed within WoW's guild channel. Guild members with a modified client can read or send addon messages, so the seed provides no secrecy or authentication.
 
 ## Commands
-`/dogs` open · `/dogs add` add target · `/dogs sync` pull the whole book · `/dogs rebuild` reset your copy from the guild · `/dogs status` sync info · `/dogs minimap` show/hide the button · `/dogs icons` show/hide nameplate icons · `/dogs plates` turn on nameplates for all nearby players · `/dogs icon <size> <height>` adjust the icon
+`/dogs` open · `/dogs add` add target · `/dogs sync` pull the whole book · `/dogs rebuild` reset your copy from the guild · `/dogs status` sync info · `/dogs minimap` show/hide the button · `/dogs icons` show/hide nameplate icons · `/dogs chat` show/hide chat icons · `/dogs plates` turn on nameplates for all nearby players · `/dogs icon <size> <height>` adjust the icon
 
 Created by CHogan.
