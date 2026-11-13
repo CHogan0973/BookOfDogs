@@ -10,10 +10,10 @@ local CHUNK = 240
 ------------------------------------------------------------------------
 -- can we send right now?
 ------------------------------------------------------------------------
--- Like OpenMap, we don't trust the "restricted" flags up front: we just send and
--- read the game's answer. Only being outside a guild stops us.
+-- The game reports its send restrictions. Check the active guild before handing
+-- queued messages to the game so they cannot go out to a newly joined guild.
 local function blocked()
-  if not IsInGuild() then return "not in a guild" end
+  if not NS.InGuildFeed() then return "no active guild feed" end
   return nil
 end
 local resultNames
@@ -62,16 +62,21 @@ local function push(raw)
   if not ticker then ticker = C_Timer.NewTicker(0.3, pump) end
 end
 
--- split long messages: "+" = more parts follow, "." = last (or only) part
+-- Tagged feeds distinguish standalone messages and the first fragment, so
+-- switching feeds mid-send can't corrupt the next message to the same peer.
 function NS.Send(msg)
-  if not NS.InDog() then return end
+  if not NS.InGuildFeed() then return end
+  local prefix = NS.FeedPrefix()
+  local chunk = CHUNK - #prefix
   local i, n = 1, #msg
-  while n - i + 1 > CHUNK do
-    local j = i + CHUNK - 1
+  while n - i + 1 > chunk do
+    local j = i + chunk - 1
     while j > i and msg:byte(j + 1) and msg:byte(j + 1) >= 128 and msg:byte(j + 1) < 192 do j = j - 1 end -- keep UTF-8 letters whole
-    push("+" .. msg:sub(i, j)); i = j + 1
+    local kind = prefix ~= "" and i == 1 and ":" or "+"
+    push(prefix .. kind .. msg:sub(i, j)); i = j + 1
   end
-  push("." .. msg:sub(i))
+  local kind = prefix ~= "" and i == 1 and "!" or "."
+  push(prefix .. kind .. msg:sub(i))
 end
 
 local function esc(s) return (tostring(s or ""):gsub(SEP, " ")) end
@@ -120,9 +125,10 @@ local function myVersion()
   return (C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata)(ADDON, "Version") or "0"
 end
 local function hello(since, followup)
-  NS.Send(table.concat({"H", since, digest(), followup and "1" or "0", myVersion(), classDigest()}, SEP))
+  NS.Send(table.concat({"H", since, digest(), followup and "1" or "0", myVersion(), classDigest(), NS.AcctDigest()}, SEP))
 end
 function NS.RequestSync(full)
+  if not NS.InGuildFeed() then return end
   -- replies to our own request are trusted for 10 minutes (vote lists, deletes, editors)
   NS.askedAt = GetTime()
   hello(full and 0 or (NS.DB().maxM or 0), true)
@@ -133,19 +139,28 @@ function NS.SendEditors()
   for name, r in pairs(NS.DB().ed or {}) do eds[#eds + 1] = esc(name) .. "=" .. r.v .. ":" .. r.m end
   if #eds > 0 then NS.Send(table.concat({"L", table.concat(eds, ",")}, SEP)) end
 end
-local function reply(requester, since, followup)
+-- which characters belong to which BattleTag account (hashed), so votes count per account
+local function sendAcctList()
+  local list = NS.AcctList()
+  if list ~= "" then NS.Send(table.concat({"K", list}, SEP)) end
+end
+-- withBook = false: only the account table is sent (their book already matches ours)
+local function reply(requester, since, followup, withBook)
   pendingReply[requester] = nil
   NS.Send(table.concat({"R", requester}, SEP)) -- tells everyone else to stand down
-  for id, e in pairs(NS.DB().e) do
-    if (e.m or 0) > since then
-      if e.x then NS.Send(table.concat({"D", id, e.x}, SEP))
-      else NS.Send(entryMsg(id, e)); sendVotes(id, e) end
+  if withBook then
+    for id, e in pairs(NS.DB().e) do
+      if (e.m or 0) > since then
+        if e.x then NS.Send(table.concat({"D", id, e.x}, SEP))
+        else NS.Send(entryMsg(id, e)); sendVotes(id, e) end
+      end
     end
+    -- the editors list (small) goes with every reply
+    NS.SendEditors()
   end
-  -- the editors list (small) goes with every reply
-  NS.SendEditors()
+  sendAcctList()
   -- after a full send, say hello back so they can return anything we were missing
-  if since == 0 and followup then hello(0, false) end
+  if withBook and since == 0 and followup then hello(0, false) end
 end
 
 ------------------------------------------------------------------------
@@ -190,7 +205,24 @@ handlers.E = function(sender, id, m, n, g, d, class)
   local e = NS.DB().e[id]; if not e or e.x then return end
   NS.ApplyEntry(id, e.t, m, n, g, e.a, d, "", true, NS.senderDisplay or sender, class ~= "" and class or nil)
 end
-handlers.V = function(sender, id, val, m) NS.ApplyVote(id, sender, val, m) end
+-- a live vote. Newer clients add their account hash; the sender's character is then
+-- known to belong to that account, and the vote counts for the account.
+handlers.V = function(sender, id, val, m, acct)
+  local voter = sender
+  if NS.ValidAcct(acct) then
+    NS.LearnAcct(sender, acct, true)
+    voter = NS.AcctKey(acct)
+  elseif NS.REQUIRE_BTAG and not NS.AcctOf(sender) then
+    return -- untagged votes aren't accepted any more
+  end
+  NS.ApplyVote(id, voter, val, m)
+end
+-- a character saying which account it is (sent at login)
+handlers.I = function(sender, acct) NS.LearnAcct(sender, acct, true) end
+-- the account table inside a sync reply: only fills in what we don't know yet
+handlers.K = function(sender, list)
+  if inReply(sender) then NS.MergeAcctList(list) end
+end
 handlers.W = function(sender, id, m, list)
   if not inReply(sender) then return end -- vote lists only come as part of a sync reply
   local e = NS.DB().e[id]
@@ -198,12 +230,18 @@ handlers.W = function(sender, id, m, list)
   m = tonumber(m) or 0
   local seen = {}
   for who, v in (list or ""):gmatch("([^,=]+)=(%-?%d)") do
-    local k = NS.VoterKey(who)
-    if k then seen[k] = true; NS.ApplyVote(id, k, v, m) end
+    local k = NS.IsAcctKey(who) and who or NS.VoterKey(who) -- account keys are kept as they are
+    local sig = k and NS.VoterSig(k)
+    if sig then seen[sig] = true; NS.ApplyVote(id, k, v, m) end
   end
   -- the sender's list is at least as new as ours: votes missing from it were taken back
+  -- (voters are matched by person, not by exact key, so one person under two keys isn't undone)
   if e.v and m >= (e.m or 0) then
-    for who in pairs(e.v) do if not seen[who] then NS.ApplyVote(id, who, 0, m) end end
+    local mine = {}
+    for who in pairs(e.v) do mine[#mine + 1] = who end
+    for _, who in ipairs(mine) do
+      if not seen[NS.VoterSig(who)] then NS.ApplyVote(id, who, 0, m) end
+    end
   end
 end
 handlers.D = function(sender, id, x)
@@ -225,19 +263,24 @@ local function checkVersion(v)
   end
 end
 
-handlers.H = function(sender, since, theirDigest, followup, ver, theirClassDigest)
+handlers.H = function(sender, since, theirDigest, followup, ver, theirClassDigest, theirAcctDigest)
   checkVersion(ver)
   since = tonumber(since) or 0
   if pendingReply[sender] then return end
   local follow = followup == "1"
+  local withBook = true
   if (theirDigest and theirDigest ~= "" and theirDigest ~= digest())
      or (theirClassDigest and theirClassDigest ~= "" and theirClassDigest ~= classDigest()) then
     since = 0 -- our books differ somewhere: send everything, then compare back
-  elseif (NS.DB().maxM or 0) <= since then
+  elseif (NS.DB().maxM or 0) > since then
+    -- they're missing some entries: send those
+  elseif theirAcctDigest and theirAcctDigest ~= "" and theirAcctDigest ~= NS.AcctDigest() then
+    withBook = false -- books match, but we know different accounts: just trade that table
+  else
     return -- nothing they don't have
   end
   -- wait a random moment; whoever answers first, the rest stay quiet
-  pendingReply[sender] = C_Timer.NewTimer(1 + math.random() * 4, function() reply(sender, since, follow) end)
+  pendingReply[sender] = C_Timer.NewTimer(1 + math.random() * 4, function() reply(sender, since, follow, withBook) end)
 end
 handlers.R = function(sender, requester)
   local t = pendingReply[requester]
@@ -254,7 +297,14 @@ end
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("CHAT_MSG_ADDON")
 frame:SetScript("OnEvent", function(_, _, prefix, msg, channel, sender)
-  if prefix ~= PREFIX or channel ~= "GUILD" or not NS.DB() then return end
+  if prefix ~= PREFIX or channel ~= "GUILD" or not NS.InGuildFeed() then return end
+  if type(msg) ~= "string" or type(sender) ~= "string"
+     or (issecretvalue and (issecretvalue(msg) or issecretvalue(sender))) then return end
+  local feed = NS.FeedPrefix()
+  if msg:sub(1, #feed) ~= feed then return end
+  local kind = msg:sub(#feed + 1, #feed + 1)
+  if kind ~= "+" and kind ~= "." and (feed == "" or (kind ~= ":" and kind ~= "!")) then return end
+  local body = msg:sub(#feed + 2)
   -- everyone is handled by one id per character ("First-Realm"); their full
   -- in-game name ("First Last") is remembered for display
   NS.LearnName(sender)
@@ -262,14 +312,20 @@ frame:SetScript("OnEvent", function(_, _, prefix, msg, channel, sender)
   sender = NS.Id(sender)
   if not sender or sender == NS.MyId() then return end
   NS.stats.recv = NS.stats.recv + 1
-  local kind, body = msg:sub(1, 1), msg:sub(2)
-  if kind == "+" then
-    local b = (buffers[sender] or "") .. body
+  if kind == ":" or kind == "+" then
+    local previous = buffers[sender]
+    if kind == "+" and feed ~= "" and not previous then return end
+    local b = (kind == "+" and previous or "") .. body
     buffers[sender] = #b <= 4096 and b or nil -- nothing we send is this long; drop junk
     return
   end
-  if kind ~= "." then return end
-  if buffers[sender] then body = buffers[sender] .. body; buffers[sender] = nil end
+  if kind == "." then
+    local previous = buffers[sender]
+    if feed ~= "" and not previous then return end
+    body = (previous or "") .. body
+  end
+  buffers[sender] = nil
+  if feed ~= "" and #body > 4096 then return end
   local ok, err = pcall(handle, sender, body)
   if not ok and BookOfDogsDB and BookOfDogsDB.debug then print("Book of Dogs:", err) end
 end)
@@ -279,7 +335,8 @@ end)
 local chatFrame = CreateFrame("Frame")
 chatFrame:RegisterEvent("CHAT_MSG_GUILD")
 chatFrame:SetScript("OnEvent", function(_, _, text, sender)
-  if not NS.DB() or type(text) ~= "string" or (issecretvalue and issecretvalue(text)) then return end
+  if not NS.InGuildFeed() or not NS.LegacyFeed() or type(text) ~= "string"
+     or (issecretvalue and issecretvalue(text)) then return end
   if text:sub(1, 15) ~= "[Book of Dogs] " then return end
   NS.LearnName(sender)
   local disp = NS.Display(sender)
@@ -293,12 +350,30 @@ chatFrame:SetScript("OnEvent", function(_, _, text, sender)
   if NS.ApplyEntry(id, t, t, name, guild or "", disp, desc, "", false) then NS.stats.chat = NS.stats.chat + 1 end
 end)
 
-function NS.CommStart()
-  if C_ChatInfo.RegisterAddonMessagePrefix then C_ChatInfo.RegisterAddonMessagePrefix(PREFIX) end
+function NS.CommFeedChanged()
+  if ticker then ticker:Cancel(); ticker = nil end
+  wipe(queue); head = 1
+  for _, timer in pairs(pendingReply) do timer:Cancel() end
+  wipe(pendingReply); wipe(buffers); wipe(recent)
+  NS.askedAt, NS.inReplyFrom, NS.inReplyUntil, NS.senderDisplay = nil, nil, nil, nil
+  NS.stats = {sent = 0, failed = 0, recv = 0, chat = 0, queued = 0}
+  if not NS.InGuildFeed() then return end
+  local revision = NS.FeedRevision
   -- give the guild roster a moment to load, then ask what we missed
   C_Timer.After(10, function()
-    if not NS.InDog() then return end
+    if revision ~= NS.FeedRevision or not NS.InGuildFeed() then return end
     NS.RequestSync(false)
     if NS.IsMainAdmin() then NS.SendEditors() end -- the main admin keeps everyone's editor list current
+    -- say which BattleTag account I am; Battle.net can connect a little after login, so try again
+    if not NS.AnnounceAcct() then
+      C_Timer.After(30, function()
+        if revision == NS.FeedRevision and NS.InGuildFeed() then NS.AnnounceAcct() end
+      end)
+    end
   end)
+end
+
+function NS.CommStart()
+  if C_ChatInfo.RegisterAddonMessagePrefix then C_ChatInfo.RegisterAddonMessagePrefix(PREFIX) end
+  NS.CommFeedChanged()
 end

@@ -88,6 +88,7 @@ StaticPopupDialogs.BOOKOFDOGS_ADD = {
     if eb then eb:SetText(""); eb:SetFocus() end
   end,
   OnAccept = function(self, data)
+    if not data or data.revision ~= NS.FeedRevision or not NS.InGuildFeed() then return end
     local eb = self.EditBox or self.editBox or (self.GetEditBox and self:GetEditBox())
     local text = eb and eb:GetText() or ""
     if NS.Clean(text) == "" then return true end -- keep the popup open until something is written
@@ -95,8 +96,9 @@ StaticPopupDialogs.BOOKOFDOGS_ADD = {
       print("|cff" .. NS.GOLD .. "Book of Dogs|r: |cffff5555that description has language that isn't allowed in the Book. Please reword it.|r")
       return true -- keep the popup open so they can fix it
     end
-    NS.Add(data.name, data.realm, data.guild, text, data.full, nil, data.class)
-    print(("|cff%sBook of Dogs|r: added %s."):format(NS.GOLD, data.full or data.name))
+    if NS.Add(data.name, data.realm, data.guild, text, data.full, nil, data.class) then
+      print(("|cff%sBook of Dogs|r: added %s."):format(NS.GOLD, data.full or data.name))
+    end
   end,
   EditBoxOnEnterPressed = function(self)
     local p = self:GetParent()
@@ -106,7 +108,7 @@ StaticPopupDialogs.BOOKOFDOGS_ADD = {
 }
 
 function NS.ShowAddPopup(unit, name, realm)
-  if not NS.InDog() then print("|cff" .. NS.GOLD .. "Book of Dogs|r: only members of <Dog> can add entries."); return end
+  if not NS.InGuildFeed() then print("|cff" .. NS.GOLD .. "Book of Dogs|r: join a guild to add entries."); return end
   if unit and name == nil then name, realm = UnitName(unit) end
   if secret(name) or secret(realm) or not name or name == "" then return end
   -- the second value is a surname on Forever, not a realm
@@ -119,13 +121,14 @@ function NS.ShowAddPopup(unit, name, realm)
     unit = unitFor(key)
   end
   local data = {name = name, realm = realm, guild = guildOf(unit, key), full = fullName(unit, name),
-                class = unit and select(2, UnitClass(unit))}
+                class = unit and select(2, UnitClass(unit)), revision = NS.FeedRevision}
   if secret(data.class) or not NS.ValidClass(data.class) then data.class = nil end
   if secret(data.guild) then data.guild = "" end
   -- a name typed or clicked with a surname already in it is the full name
   if not data.full and fromPair:find(" ", 1, true) then data.full = fromPair end
 
   local function finish()
+    if data.revision ~= NS.FeedRevision or not NS.InGuildFeed() then return end
     -- already in the Book: say so instead of adding again
     local hits = NS.FindEntries(key, data.full)
     if #hits > 0 then
@@ -139,8 +142,8 @@ function NS.ShowAddPopup(unit, name, realm)
       NS.ShowEntry(e.f or e.n)
       return
     end
-    if NS.IsDogMember(data.full or key, data.guild) then
-      UIErrorsFrame:AddMessage("Members of <Dog> can't be added to the Book of Dogs.", 1, 0.1, 0.1)
+    if NS.IsGuildmate(data.full or key, data.guild) then
+      UIErrorsFrame:AddMessage("Guildmates can't be added to the Book of Dogs.", 1, 0.1, 0.1)
       return
     end
     local cls = NS.ClassName(data.class)
@@ -169,7 +172,7 @@ end
 -- right-click menus (modern menu system)
 -- player tooltips: "DOG - note" for anyone in the Book
 local function addDogLines(tooltip, unit)
-  if not unit or not NS.DB() or not UnitIsPlayer(unit) then return end
+  if not unit or not NS.InGuildFeed() or not UnitIsPlayer(unit) then return end
   local name, second = UnitName(unit)
   if secret(name) or secret(second) or not name then return end
   local full = fullName(unit, name) or NS.FullFrom(name, second)
@@ -199,7 +202,8 @@ if Menu and Menu.ModifyMenu then
                 "MENU_UNIT_ENEMY_PLAYER", "MENU_UNIT_FRIEND", "MENU_UNIT_GUILD", "MENU_UNIT_CHAT_ROSTER",
                 "MENU_UNIT_COMMUNITIES_GUILD_MEMBER", "MENU_UNIT_COMMUNITIES_MEMBER", "MENU_UNIT_WORLD_STATE_SCORE"}
   local function add(owner, root, ctx)
-    if not NS.InDog() or not ctx then return end
+    if not NS.InGuildFeed() or not ctx then return end
+    local revision = NS.FeedRevision
     local unit, name, realm = ctx.unit, ctx.name, ctx.server
     if unit and not UnitIsPlayer(unit) then return end
     if unit and name == nil then name, realm = UnitName(unit) end
@@ -209,7 +213,7 @@ if Menu and Menu.ModifyMenu then
     local guid = unit and UnitGUID(unit)
     local g = unit and GetGuildInfo(unit)
     local full = (unit and fullName(unit, name)) or (pairFull:find(" ", 1, true) and pairFull) or nil
-    if NS.IsDogMember(full or NS.Key(name, realm), type(g) == "string" and not (issecretvalue and issecretvalue(g)) and g or nil) then return end
+    if NS.IsGuildmate(full or NS.Key(name, realm), type(g) == "string" and not (issecretvalue and issecretvalue(g)) and g or nil) then return end
     root:CreateDivider()
     -- already in the Book: show "DOG" and their note instead of the add option
     local hits = NS.FindEntries(NS.Key(name, realm), full)
@@ -220,12 +224,13 @@ if Menu and Menu.ModifyMenu then
         if #note > 60 then note = note:sub(1, 57):gsub("[\192-\255][\128-\191]*$", "") .. "..." end
         local s = e.s or 0
         root:CreateButton(("|cffff4040DOG|r %s  |cff888888(%s%d)|r"):format(note, s > 0 and "+" or "", s), function()
-          NS.ShowEntry(e.f or e.n)
+          if revision == NS.FeedRevision then NS.ShowEntry(e.f or e.n) end
         end)
       end
       return
     end
     root:CreateButton("|cffffcc33Add to Book of Dogs|r", function()
+      if revision ~= NS.FeedRevision or not NS.InGuildFeed() then return end
       local current = unit and UnitGUID(unit)
       -- still the same player? (GUIDs can be hidden for the other faction; fall back to the name)
       local sameUnit
