@@ -212,6 +212,6 @@ function NS.VoterName(who)
   for disp in pairs(found) do list[#list + 1] = disp end
   table.sort(list)
   if #list == 0 then return "Unknown player" end
-  -- several characters on one account: show one, and how many more
-  return #list == 1 and list[1] or (list[1] .. " +" .. (#list - 1))
+  -- several characters on one account: show just one name (it's still one vote)
+  return list[1]
 end

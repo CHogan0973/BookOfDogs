@@ -27,8 +27,12 @@ local now = GetServerTime
 ------------------------------------------------------------------------
 local myRealm
 function NS.MyRealm()
-  myRealm = myRealm or (GetNormalizedRealmName and GetNormalizedRealmName()) or (GetRealmName() or ""):gsub("[%s%-]", "")
-  return myRealm
+  if myRealm and myRealm ~= "" then return myRealm end
+  -- early in loading the realm can still be blank: don't keep a blank answer
+  local r = GetNormalizedRealmName and GetNormalizedRealmName()
+  if type(r) ~= "string" or r == "" then r = (GetRealmName() or ""):gsub("[%s%-]", "") end
+  if r ~= "" then myRealm = r end
+  return r
 end
 -- "Name" for my realm, "Name-Realm" otherwise (the same form chat and the roster use)
 function NS.Key(name, realm)
@@ -170,6 +174,7 @@ local function currentGuild()
   if (issecretvalue and (issecretvalue(name) or issecretvalue(realm))) or not name or name == "" then return end
   realm = realm and realm:gsub("[%s%-]", "") or ""
   if realm == "" then realm = NS.MyRealm() end
+  if realm == "" then return end -- realm not known yet; try again on the next event
   return realm:lower() .. ":" .. name:lower(), name
 end
 
@@ -261,6 +266,7 @@ function NS.ScanRoster()
   end
   wipe(officerRank)
   if db then NS.Normalize() end
+  if rosterReady and NS.CheckLegacyGuild then NS.CheckLegacyGuild() end
 end
 -- Check the active guild's name and roster.
 function NS.IsGuildmate(key, guild)
@@ -781,7 +787,69 @@ end
 ------------------------------------------------------------------------
 -- startup
 ------------------------------------------------------------------------
-local loggedIn
+local loggedIn, forceRefresh
+
+-- The original Dog book lives at the top of BookOfDogsDB (so older releases can read it)
+-- and belongs to one guild named Dog: BookOfDogsDB.legacyGuild. That used to be fixed
+-- to the first Dog guild seen, which could be wrong (an alt in another realm's Dog, or
+-- a blank realm while loading), leaving the real Dog on an empty book that couldn't sync.
+-- It now heals itself: a blank-realm pick is replaced at once, and a Dog guild whose
+-- roster matches the people in the book (authors, voters, editors) better than the
+-- current pick takes over. Anything written to the wrong book meanwhile is merged back.
+local function isBlankKey(k) return type(k) == "string" and k:sub(1, 1) == ":" end
+
+local function adoptOrphan(key)
+  local profile = BookOfDogsDB.feeds[key]
+  local orphan = profile and profile.books and profile.books[DEFAULT_FEED]
+  if not orphan then return end
+  local root = BookOfDogsDB
+  root.e, root.ed, root.acct, root.names = root.e or {}, root.ed or {}, root.acct or {}, root.names or {}
+  for id, e in pairs(orphan.e or {}) do
+    local cur = root.e[id]
+    if not cur or (not cur.x and (e.m or 0) > (cur.m or 0)) then root.e[id] = e end
+  end
+  for who, r in pairs(orphan.ed or {}) do
+    local cur = root.ed[who]
+    if type(r) == "table" and (not cur or (r.m or 0) > (cur.m or 0)) then root.ed[who] = r end
+  end
+  for k, h in pairs(orphan.acct or {}) do if root.acct[k] == nil then root.acct[k] = h end end
+  for k, v in pairs(orphan.names or {}) do if root.names[k] == nil then root.names[k] = v end end
+  if (orphan.maxM or 0) > (root.maxM or 0) then root.maxM = orphan.maxM end
+  profile.books[DEFAULT_FEED] = nil
+end
+
+local function relatch(key)
+  local old = BookOfDogsDB.legacyGuild
+  if old == key then return end
+  adoptOrphan(key)
+  BookOfDogsDB.legacyGuild = key
+  if isBlankKey(old) then BookOfDogsDB.feeds[old] = nil end
+  forceRefresh = true
+end
+
+-- how many people in this guild's roster appear in the original Dog book
+local function rootOverlap()
+  if not rosterReady then return nil end
+  local members = {}
+  for id in pairs(rankOf) do
+    local b = base(id)
+    members[b] = true
+    if not rosterHasSurnames then members[b:match("^%S+") or b] = true end
+  end
+  local seen, n = {}, 0
+  local function check(who)
+    if type(who) ~= "string" or who:sub(1, 1) == "#" then return end
+    local b = base(who)
+    if b == "" or seen[b] then return end
+    if members[b] or (not rosterHasSurnames and members[b:match("^%S+") or b]) then seen[b] = true; n = n + 1 end
+  end
+  for _, e in pairs(BookOfDogsDB.e or {}) do
+    if not e.x then check(e.a); for k in pairs(e.v or {}) do check(k) end end
+  end
+  for k in pairs(BookOfDogsDB.ed or {}) do check(k) end
+  return n
+end
+
 local function refreshFeed()
   local key, name = currentGuild()
   local profile
@@ -789,12 +857,14 @@ local function refreshFeed()
     local guilds = BookOfDogsDB.feeds
     profile = guilds[key] or {seed = DEFAULT_FEED, books = {}}
     guilds[key] = profile
-    if name:lower() == LEGACY_GUILD and not BookOfDogsDB.legacyGuild then
-      BookOfDogsDB.legacyGuild = key
+    if name:lower() == LEGACY_GUILD then
+      local lg = BookOfDogsDB.legacyGuild
+      if not lg or isBlankKey(lg) then relatch(key) end
     end
   end
   local seed = profile and profile.seed
-  if db and activeGuild == key and activeSeed == seed then return end
+  if db and activeGuild == key and activeSeed == seed and not forceRefresh then return end
+  forceRefresh = false
   local guildChanged = activeGuild ~= key
   if guildChanged then
     wipe(rankOf); wipe(firstCount); wipe(officerRank)
@@ -821,6 +891,24 @@ local function refreshFeed()
   if NS.CloseFeedDialogs then NS.CloseFeedDialogs(guildChanged) end
   NS.Changed()
   return true
+end
+
+-- after the roster loads: is this Dog guild a better match for the original book?
+function NS.CheckLegacyGuild()
+  local key, name = currentGuild()
+  if not key or activeGuild ~= key or name:lower() ~= LEGACY_GUILD then return end
+  local score = rootOverlap()
+  if not score then return end
+  if key == BookOfDogsDB.legacyGuild then
+    if score > (BookOfDogsDB.legacyScore or 0) then BookOfDogsDB.legacyScore = score end
+    return
+  end
+  if score >= 2 and score > (BookOfDogsDB.legacyScore or 0) then
+    relatch(key)
+    BookOfDogsDB.legacyScore = score
+    refreshFeed()
+    print("|cff" .. NS.GOLD .. "Book of Dogs|r: found the guild's book of dogs for <" .. name .. "> and restored it.")
+  end
 end
 
 function NS.SelectFeed(seed)
