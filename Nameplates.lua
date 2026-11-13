@@ -63,6 +63,7 @@ f:RegisterEvent("NAME_PLATE_UNIT_REMOVED")
 f:RegisterEvent("UNIT_NAME_UPDATE")
 f:SetScript("OnEvent", function(_, event, unit)
   if not (C_NamePlate and C_NamePlate.GetNamePlateForUnit) or not unit then return end
+  if not tostring(unit):find("^nameplate") then return end
   local plate = C_NamePlate.GetNamePlateForUnit(unit)
   if not plate then return end
   if event == "NAME_PLATE_UNIT_REMOVED" then
