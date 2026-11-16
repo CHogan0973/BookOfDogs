@@ -761,7 +761,7 @@ end
 local loggedIn, forceRefresh
 
 -- The original Dog book lives at the top of BookOfDogsDB (so older releases can read it).
--- Releases 75.0.0-75.0.3 pinned it to the first Dog guild seen, which could be wrong and
+-- Some earlier releases pinned it to the first Dog guild seen, which could be wrong and
 -- left the real Dog on an empty separate book. Now every guild named Dog uses it, and any
 -- entries written to a separate Dog book are merged back in on login.
 local function isBlankKey(k) return type(k) == "string" and k:sub(1, 1) == ":" end
@@ -790,7 +790,7 @@ local function adoptOrphan(key)
   profile.books[DEFAULT_FEED] = nil
 end
 
--- Custom feeds (75.0.x) are gone: each guild has one book. Fold any custom-feed books
+-- Custom feeds (earlier releases) are gone: each guild has one book. Fold any custom-feed books
 -- back into the guild's book and drop the old feed settings.
 local function foldCustomFeeds(profile, isDog)
   profile.books = profile.books or {}

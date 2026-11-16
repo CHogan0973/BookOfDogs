@@ -252,6 +252,8 @@ end
 local function vnum(v)
   local a, b, c = tostring(v or ""):match("^(%d+)%.?(%d*)%.?(%d*)$")
   if not a then return nil end
+  -- releases before the move to 1.x were numbered 73-75: those are older than any 1.x
+  if tonumber(a) >= 70 then return 0 end
   return tonumber(a) * 1e6 + (tonumber(b) or 0) * 1e3 + (tonumber(c) or 0)
 end
 local toldNewer
@@ -259,7 +261,7 @@ local function checkVersion(v)
   local theirs, mine = vnum(v), vnum(myVersion())
   if theirs and mine and theirs > mine and not toldNewer then
     toldNewer = true
-    print(("|cff%sBook of Dogs|r: a guildmate has version |cffffffff%s|r (you have %s). Ask an officer for the new zip."):format(NS.GOLD, v, myVersion()))
+    print(("|cff%sBook of Dogs|r: a guildmate has version |cffffffff%s|r (you have %s). Update Book of Dogs from CurseForge."):format(NS.GOLD, v, myVersion()))
   end
 end
 
