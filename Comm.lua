@@ -81,7 +81,7 @@ end
 
 local function esc(s) return (tostring(s or ""):gsub(SEP, " ")) end
 local function entryMsg(id, e)
-  return table.concat({"A", id, e.t or 0, e.m or 0, esc(e.n), esc(e.g), esc(e.a), esc(e.d), esc(e.f), esc(e.ed), esc(e.c)}, SEP)
+  return table.concat({"A", id, e.t or 0, e.m or 0, esc(e.n), esc(e.g), esc(e.a), esc(e.d), esc(e.f), esc(e.ed), esc(e.c), esc(e.k)}, SEP)
 end
 function NS.SendEntry(id)
   local e = NS.DB().e[id]; if e and not e.x then NS.Send(entryMsg(id, e)) end
@@ -120,12 +120,25 @@ local function classDigest()
   return tostring(hash)
 end
 
+-- tags: a separate fingerprint too (older clients don't send one, so it's only compared
+-- between clients that both know about tags)
+local function tagDigest()
+  local tags = {}
+  for id, e in pairs(NS.DB().e) do
+    if not e.x and e.k then tags[#tags + 1] = id .. ":" .. e.k end
+  end
+  table.sort(tags)
+  local data, hash = table.concat(tags, ","), 0
+  for i = 1, #data do hash = (hash * 31 + data:byte(i)) % 2147483647 end
+  return tostring(hash)
+end
+
 -- followup: "1" asks the other side to compare back (only for the first round)
 local function myVersion()
   return (C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata)(ADDON, "Version") or "0"
 end
 local function hello(since, followup)
-  NS.Send(table.concat({"H", since, digest(), followup and "1" or "0", myVersion(), classDigest(), NS.AcctDigest()}, SEP))
+  NS.Send(table.concat({"H", since, digest(), followup and "1" or "0", myVersion(), classDigest(), NS.AcctDigest(), tagDigest()}, SEP))
 end
 function NS.RequestSync(full)
   if not NS.InGuildFeed() then return end
@@ -175,7 +188,7 @@ local function inReply(sender)
   if NS.inReplyFrom == sender and GetTime() < (NS.inReplyUntil or 0) then return true end
   return NS.askedAt ~= nil and GetTime() - NS.askedAt < 600
 end
-handlers.A = function(sender, id, t, m, n, g, a, d, f, ed, class)
+handlers.A = function(sender, id, t, m, n, g, a, d, f, ed, class, tag)
   local canEdit, canFillClass = inReply(sender), false
   if not canEdit then
     local now, r = GetTime(), recent[sender] or {}
@@ -188,7 +201,7 @@ handlers.A = function(sender, id, t, m, n, g, a, d, f, ed, class)
     canFillClass = e and NS.Id(e.a) == sender and e.t == tonumber(t)
                    and (e.n == NS.Clean(n, 60) or e.n == NS.Clean(f, 40))
   end
-  NS.ApplyEntry(id, t, m, n, g, a, d, f, canEdit, ed, class, canFillClass)
+  NS.ApplyEntry(id, t, m, n, g, a, d, f, canEdit, ed, class, canFillClass, tag)
 end
 -- editor granted/removed: only the main admin can do this
 handlers.G = function(sender, name, v, m)
@@ -200,10 +213,10 @@ handlers.L = function(sender, list)
   for name, v, m in (list or ""):gmatch("([^,=]+)=(%d):(%d+)") do NS.ApplyEditor(name, v, m) end
 end
 -- an admin's edit of an existing entry
-handlers.E = function(sender, id, m, n, g, d, class)
+handlers.E = function(sender, id, m, n, g, d, class, tag)
   if not NS.CanDelete(sender) then return end
   local e = NS.DB().e[id]; if not e or e.x then return end
-  NS.ApplyEntry(id, e.t, m, n, g, e.a, d, "", true, NS.senderDisplay or sender, class ~= "" and class or nil)
+  NS.ApplyEntry(id, e.t, m, n, g, e.a, d, "", true, NS.senderDisplay or sender, class ~= "" and class or nil, nil, tag)
 end
 -- a live vote. Newer clients add their account hash; the sender's character is then
 -- known to belong to that account, and the vote counts for the account.
@@ -265,14 +278,15 @@ local function checkVersion(v)
   end
 end
 
-handlers.H = function(sender, since, theirDigest, followup, ver, theirClassDigest, theirAcctDigest)
+handlers.H = function(sender, since, theirDigest, followup, ver, theirClassDigest, theirAcctDigest, theirTagDigest)
   checkVersion(ver)
   since = tonumber(since) or 0
   if pendingReply[sender] then return end
   local follow = followup == "1"
   local withBook = true
   if (theirDigest and theirDigest ~= "" and theirDigest ~= digest())
-     or (theirClassDigest and theirClassDigest ~= "" and theirClassDigest ~= classDigest()) then
+     or (theirClassDigest and theirClassDigest ~= "" and theirClassDigest ~= classDigest())
+     or (theirTagDigest and theirTagDigest ~= "" and theirTagDigest ~= tagDigest()) then
     since = 0 -- our books differ somewhere: send everything, then compare back
   elseif (NS.DB().maxM or 0) > since then
     -- they're missing some entries: send those

@@ -7,7 +7,7 @@ local MAXROWS = 20                 -- row frames built; how many show depends on
 local MINW, MINH, MAXW = 580, 280, 1100
 local INSET_PAD = 8                -- space above the first row and below the last (inside the inset)
 local SCROLLBAR_W = 28             -- room the scroll bar takes on the right when it is showing
-local CHROME_H = 66 + 32           -- inset's top + bottom offsets inside the window
+local CHROME_H = 66 + 46           -- inset's top + bottom offsets inside the window
 local MAXH = MAXROWS * ROWH + INSET_PAD + CHROME_H
 local frame, rows, scroll, search, countText, list, inset
 local visibleRows = 1
@@ -61,6 +61,25 @@ local function refresh()
         .. (cls and ("  " .. NS.ColorName(cls, e.c)) or "")
         .. (e.g and ("  |cff40c040<" .. e.g .. ">|r") or ""))
       r.desc:SetText(e.d or "")
+      -- tags as pills under the note; "added by" follows them
+      local tags = NS.TagList(e.k)
+      local last
+      for j = 1, #NS.TAGS do
+        local p, k = r.pills[j], tags[j]
+        if k then
+          local t = NS.TagInfo(k)
+          p.text:SetText(t.label); p.text:SetTextColor(t.r, t.g, t.b)
+          p.bg:SetColorTexture(t.r, t.g, t.b, 0.18); p.edge:SetColorTexture(t.r, t.g, t.b, 0.7)
+          p:SetWidth(p.text:GetStringWidth() + 14)
+          p:ClearAllPoints()
+          if last then p:SetPoint("LEFT", last, "RIGHT", 4, 0) else p:SetPoint("BOTTOMLEFT", r, "BOTTOMLEFT", 78, 3) end
+          p:Show(); last = p
+        else
+          p:Hide()
+        end
+      end
+      r.by:ClearAllPoints()
+      if last then r.by:SetPoint("LEFT", last, "RIGHT", 8, 0) else r.by:SetPoint("BOTTOMLEFT", 78, 5) end
       r.by:SetText(("added by %s  ·  %s%s"):format(NS.Display(e.a or "?"), ago(e.t), e.ed and ("  ·  edited by " .. NS.Display(e.ed)) or ""))
       r.del:SetShown(canDel); r.edit:SetShown(canDel)
       r:Show()
@@ -131,7 +150,7 @@ local function build()
   frame:SetMovable(true); frame:EnableMouse(true); frame:RegisterForDrag("LeftButton")
   frame:SetScript("OnDragStart", frame.StartMoving); frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
   tinsert(UISpecialFrames, "BookOfDogsFrame")
-  inset:ClearAllPoints(); inset:SetPoint("TOPLEFT", 8, -66); inset:SetPoint("BOTTOMRIGHT", -8, 32)
+  inset:ClearAllPoints(); inset:SetPoint("TOPLEFT", 8, -66); inset:SetPoint("BOTTOMRIGHT", -8, 46)
 
   local okSearch
   okSearch, search = pcall(CreateFrame, "EditBox", "BookOfDogsSearch", frame, "SearchBoxTemplate")
@@ -165,6 +184,19 @@ local function build()
     r.desc:SetJustifyH("LEFT"); r.desc:SetJustifyV("TOP"); r.desc:SetHeight(26); r.desc:SetWordWrap(true)
     if r.desc.SetMaxLines then r.desc:SetMaxLines(2) end
     r.by = r:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall"); r.by:SetPoint("BOTTOMLEFT", 78, 5)
+    -- tag pills: a tinted box with a brighter outline (inner box inset 1px)
+    r.pills = {}
+    for j = 1, #NS.TAGS do
+      local p = CreateFrame("Frame", nil, r)
+      p:SetHeight(14)
+      p.edge = p:CreateTexture(nil, "BACKGROUND"); p.edge:SetAllPoints()
+      p.bg = p:CreateTexture(nil, "BORDER"); p.bg:SetPoint("TOPLEFT", 1, -1); p.bg:SetPoint("BOTTOMRIGHT", -1, 1)
+      local fill = p:CreateTexture(nil, "BACKGROUND", nil, 1); fill:SetPoint("TOPLEFT", 1, -1); fill:SetPoint("BOTTOMRIGHT", -1, 1)
+      fill:SetColorTexture(0.05, 0.05, 0.05, 1)
+      p.text = p:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"); p.text:SetPoint("CENTER", 0, 0)
+      p:Hide()
+      r.pills[j] = p
+    end
     r.del = CreateFrame("Button", nil, r); r.del:SetSize(16, 16); r.del:SetPoint("TOPRIGHT", -2, -4)
     r.del:SetNormalTexture("Interface\\Buttons\\UI-GroupLoot-Pass-Up")
     r.del:SetPushedTexture("Interface\\Buttons\\UI-GroupLoot-Pass-Down")
@@ -211,6 +243,8 @@ local function build()
   verText:SetPoint("LEFT", countText, "RIGHT", 10, 0); verText:SetText("v" .. ver)
   local credit = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
   credit:SetPoint("RIGHT", search, "LEFT", -12, 0); credit:SetText("Created by CHogan")
+  local contrib = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  contrib:SetPoint("BOTTOMLEFT", 16, 32); contrib:SetText("Main Contributors: Oasli, Relreo")
 
   local sync = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
   sync:SetSize(80, 22); sync:SetPoint("BOTTOMRIGHT", -24, 5); sync:SetText("Sync")
@@ -262,6 +296,24 @@ local function build()
   frame:Hide()
 end
 
+-- a tick-box menu of tags (several can be on). get() returns the current list, set(list) saves it.
+function NS.TagMenu(owner, get, set)
+  if MenuUtil and MenuUtil.CreateContextMenu then
+    MenuUtil.CreateContextMenu(owner, function(_, root)
+      root:CreateTitle("Tags")
+      for _, t in ipairs(NS.TAGS) do
+        root:CreateCheckbox(NS.TagText(t.key), function() return NS.HasTag(get(), t.key) end,
+          function() set(NS.ToggleTag(get(), t.key)) end)
+      end
+      root:CreateButton("Clear", function() set("") end)
+    end)
+  else -- no menus on this client: each click adds the next tag, then clears
+    local list, nextKey = get(), nil
+    for _, t in ipairs(NS.TAGS) do if not NS.HasTag(list, t.key) then nextKey = t.key; break end end
+    set(nextKey and NS.ToggleTag(list, nextKey) or "")
+  end
+end
+
 -- right-click an entry: who voted which way (each person's current vote only)
 local function votersOf(id)
   local e = NS.DB().e[id]
@@ -305,6 +357,15 @@ function NS.ShowVoters(owner, id)
             sub:CreateButton(NS.ColorName(NS.ClassName(c), c) .. (e.c == c and "  |cffffffff(current)|r" or ""), function() set(c) end)
           end
         end
+        local tsub = root:CreateButton("Tags")
+        for _, t in ipairs(NS.TAGS) do
+          tsub:CreateCheckbox(NS.TagText(t.key), function() return NS.HasTag(e.k, t.key) end, function()
+            if revision == NS.FeedRevision then NS.Edit(id, e.f or e.n, e.g or "", e.d or "", e.c, NS.ToggleTag(e.k, t.key)) end
+          end)
+        end
+        tsub:CreateButton("Clear tags", function()
+          if revision == NS.FeedRevision then NS.Edit(id, e.f or e.n, e.g or "", e.d or "", e.c, "") end
+        end)
         root:CreateButton("Edit entry...", function()
           if revision == NS.FeedRevision then NS.OpenEditor(id) end
         end)
@@ -422,6 +483,18 @@ local function buildEditor()
       editor.setClass(NS.CLASSES[i + 1])
     end
   end)
+  -- tag picker (optional)
+  local tl = editor:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  tl:SetPoint("TOPLEFT", 190, -166); tl:SetText("Tags")
+  local tpick = CreateFrame("Button", nil, editor, "UIPanelButtonTemplate")
+  tpick:SetSize(180, 22); tpick:SetPoint("TOPLEFT", 192, -180)
+  function editor.setTag(list)
+    editor.tag = NS.ParseTags(list)
+    tpick:SetText(editor.tag ~= "" and NS.TagText(editor.tag) or "None")
+  end
+  tpick:SetScript("OnClick", function(self)
+    NS.TagMenu(self, function() return editor.tag end, function(list) editor.setTag(list) end)
+  end)
   editor.name:SetScript("OnTabPressed", function() editor.guild:SetFocus() end)
   editor.guild:SetScript("OnTabPressed", function() editor.desc:SetFocus() end)
   editor.desc:SetScript("OnTabPressed", function() editor.name:SetFocus() end)
@@ -438,7 +511,7 @@ local function buildEditor()
       return
     end
     if editor.id then
-      if NS.Edit(editor.id, n, g, d, editor.class) then editor:Hide() end
+      if NS.Edit(editor.id, n, g, d, editor.class, editor.tag) then editor:Hide() end
       return
     end
     -- new entry: look the player up with /who for their class (and guild if left blank)
@@ -460,7 +533,7 @@ local function buildEditor()
       else
         print("|cff" .. NS.GOLD .. "Book of Dogs|r: /who didn't find " .. n .. " online, so the class is left unknown (you can set it later).")
       end
-      if NS.Add(n, nil, g, d, nil, true, class) then editor:Hide() end
+      if NS.Add(n, nil, g, d, nil, true, class, editor.tag) then editor:Hide() end
     end)
   end
   save:SetScript("OnClick", submit)
@@ -476,6 +549,7 @@ function NS.OpenEditor(id)
   editor.title:SetText(e and "Edit entry" or "New entry")
   editor.name:SetText(e and (e.f or e.n) or ""); editor.guild:SetText(e and e.g or ""); editor.desc:SetText(e and e.d or "")
   editor.setClass(e and e.c)
+  editor.setTag(e and e.k or "")
   editor:Show(); editor.name:SetFocus()
 end
 

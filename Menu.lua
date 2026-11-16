@@ -78,6 +78,34 @@ local function guildOf(unit, key)
   return ""
 end
 
+-- a small "Tag: ..." strip that hangs under the Add popup
+local tagStrip
+local function tagStripFor(dialog)
+  if not tagStrip then
+    tagStrip = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+    tagStrip:SetSize(300, 34)
+    if tagStrip.SetBackdrop then
+      tagStrip:SetBackdrop({bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                            tile = true, tileSize = 16, edgeSize = 12, insets = {left = 3, right = 3, top = 3, bottom = 3}})
+    end
+    local label = tagStrip:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    label:SetPoint("LEFT", 12, 0); label:SetText("Tag:")
+    local btn = CreateFrame("Button", nil, tagStrip, "UIPanelButtonTemplate")
+    btn:SetSize(230, 22); btn:SetPoint("LEFT", label, "RIGHT", 8, 0)
+    tagStrip.btn = btn
+    function tagStrip.set(list)
+      tagStrip.tag = NS.ParseTags(list)
+      btn:SetText(tagStrip.tag ~= "" and NS.TagText(tagStrip.tag) or "None (optional)")
+    end
+    btn:SetScript("OnClick", function(self)
+      NS.TagMenu(self, function() return tagStrip.tag end, function(list) tagStrip.set(list) end)
+    end)
+  end
+  tagStrip:SetParent(dialog); tagStrip:SetFrameStrata(dialog:GetFrameStrata())
+  tagStrip:ClearAllPoints(); tagStrip:SetPoint("TOP", dialog, "BOTTOM", 0, 2)
+  return tagStrip
+end
+
 StaticPopupDialogs.BOOKOFDOGS_ADD = {
   text = "|cffffcc33Book of Dogs|r\n\nAdd |cffffffff%s|r to the book.\nWhat should the guild know? (max 200)",
   button1 = "Add", button2 = CANCEL,
@@ -86,7 +114,9 @@ StaticPopupDialogs.BOOKOFDOGS_ADD = {
   OnShow = function(self)
     local eb = self.EditBox or self.editBox or (self.GetEditBox and self:GetEditBox())
     if eb then eb:SetText(""); eb:SetFocus() end
+    local strip = tagStripFor(self); strip.set(""); strip:Show()
   end,
+  OnHide = function() if tagStrip then tagStrip:Hide() end end,
   OnAccept = function(self, data)
     if not data or data.revision ~= NS.FeedRevision or not NS.InGuildFeed() then return end
     local eb = self.EditBox or self.editBox or (self.GetEditBox and self:GetEditBox())
@@ -96,7 +126,7 @@ StaticPopupDialogs.BOOKOFDOGS_ADD = {
       print("|cff" .. NS.GOLD .. "Book of Dogs|r: |cffff5555that description has language that isn't allowed in the Book. Please reword it.|r")
       return true -- keep the popup open so they can fix it
     end
-    if NS.Add(data.name, data.realm, data.guild, text, data.full, nil, data.class) then
+    if NS.Add(data.name, data.realm, data.guild, text, data.full, nil, data.class, tagStrip and tagStrip.tag) then
       print(("|cff%sBook of Dogs|r: added %s."):format(NS.GOLD, data.full or data.name))
     end
   end,
@@ -180,7 +210,8 @@ local function addDogLines(tooltip, unit)
   for i = 1, math.min(#hits, 2) do
     local e = NS.DB().e[hits[i]]
     local s = e.s or 0
-    tooltip:AddLine(("|cffff4040DOG|r - %s  |cff888888(%s%d)|r"):format(e.d or "", s > 0 and "+" or "", s), 1, 1, 1, true)
+    local tag = e.k and (NS.TagText(e.k) .. " ") or ""
+    tooltip:AddLine(("|cffff4040DOG|r %s- %s  |cff888888(%s%d)|r"):format(tag, e.d or "", s > 0 and "+" or "", s), 1, 1, 1, true)
   end
   if #hits > 0 then tooltip:Show() end
 end

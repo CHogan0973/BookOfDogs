@@ -392,14 +392,19 @@ function NS.ValidId(id) return type(id) == "string" and #id <= 12 and id:match("
 
 -- canEdit: may this change an existing entry? (admin edits, or a sync reply)
 -- ed: who last edited it
--- canFillClass: a live announcement from the author can fill a missing class
-function NS.ApplyEntry(id, t, m, n, g, a, d, f, canEdit, ed, class, canFillClass)
+-- canFillClass: a live announcement from the author can fill a missing class (and tag)
+-- tag: a tag key, "" for no tag, or nil when the sender didn't say (older versions)
+function NS.ApplyEntry(id, t, m, n, g, a, d, f, canEdit, ed, class, canFillClass, tag)
   if not NS.InGuildFeed() then return false end
   t, m = tonumber(t) or 0, tonumber(m) or 0
   ed = ed and NS.Clean(ed, 60) or ""
   if (issecretvalue and issecretvalue(class)) or type(class) ~= "string"
      or not (RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]) then
     class = nil
+  end
+  if tag ~= nil and tag ~= "" then -- unknown tags are dropped; nothing valid left = didn't say
+    tag = NS.ParseTags(tag)
+    if tag == "" then tag = nil end
   end
   if not NS.ValidId(id) then return false end
   -- everything from the network is cleaned and length-capped before it is stored or shown
@@ -413,22 +418,25 @@ function NS.ApplyEntry(id, t, m, n, g, a, d, f, canEdit, ed, class, canFillClass
     if e.x then return false end -- deleted stays deleted
     if not canEdit or m <= (e.m or 0) then
       -- A sync reply may predate a local edit or vote. Keep that newer data.
-      if class and not e.c and (canEdit or canFillClass) then
-        e.c = class
-        changed(); return true
-      end
+      local filled
+      if class and not e.c and (canEdit or canFillClass) then e.c = class; filled = true end
+      if tag and tag ~= "" and not e.k and (canEdit or canFillClass) then e.k = tag; filled = true end
+      if filled then changed(); return true end
       return false
     end
     class = class or e.c -- older clients and ordinary edits omit the class
-    local same = e.n == n and e.d == d and (e.g or "") == g and (e.f or "") == f and e.c == class
+    if tag == nil then tag = e.k or "" end -- older clients don't send a tag: keep it
+    local same = e.n == n and e.d == d and (e.g or "") == g and (e.f or "") == f and e.c == class and (e.k or "") == tag
     e.n, e.d, e.g, e.f = n, d, g ~= "" and g or nil, f ~= "" and f or nil
     e.c = class
+    e.k = tag ~= "" and tag or nil
     if ed ~= "" then e.ed = ed end
     e.m = m
     if same then bump(m); return false end
   else
     db.e[id] = {n = n, f = (f ~= "" and f) or nil, g = (g ~= "" and g) or nil, d = d,
-                a = a ~= "" and a or "?", t = t, m = m, s = 0, ed = ed ~= "" and ed or nil, c = class}
+                a = a ~= "" and a or "?", t = t, m = m, s = 0, ed = ed ~= "" and ed or nil, c = class,
+                k = tag ~= "" and tag or nil}
   end
   bump(m); changed(); return true
 end
@@ -491,7 +499,7 @@ function NS.ApplyDelete(id, x)
 end
 
 -- local actions ---------------------------------------------------------
-function NS.Add(name, realm, guild, desc, full, manual, class)
+function NS.Add(name, realm, guild, desc, full, manual, class, tag)
   if manual and not NS.CanDelete() then return end
   if not NS.InGuildFeed() then print("|cff" .. NS.GOLD .. "Book of Dogs|r: join a guild to add entries."); return end
   local n = NS.Key(name, realm)
@@ -508,7 +516,7 @@ function NS.Add(name, realm, guild, desc, full, manual, class)
   local id, t = NS.NewId(), now()
   full = full and full ~= name and NS.Clean(full, 40) or ""
   guild = NS.Clean(guild or "", 40)
-  if not NS.ApplyEntry(id, t, t, n, guild, NS.Display(NS.MyId()), desc, full, nil, nil, class) then return end
+  if not NS.ApplyEntry(id, t, t, n, guild, NS.Display(NS.MyId()), desc, full, nil, nil, class, nil, NS.ParseTags(tag)) then return end
   NS.SendEntry(id)
   if not NS.LegacyFeed() then return id end
   -- announce in guild chat (this runs from the popup's button click)
@@ -546,8 +554,56 @@ function NS.ColorName(name, c)
   return hex and ("|c" .. hex .. name .. "|r") or name
 end
 
+-- tags: quick labels on an entry, shown as pills under the note. An entry can have
+-- several; they're stored as "toxic,ninja" (searchable: type a tag name in the search box)
+NS.TAGS = {
+  {key = "toxic", label = "Toxic",   color = "ffc080ff", r = 0.75, g = 0.5,  b = 1},
+  {key = "ninja", label = "Ninja",   color = "ffff8000", r = 1,    g = 0.5,  b = 0},
+  {key = "scam",  label = "Scammer", color = "ffff3030", r = 1,    g = 0.19, b = 0.19},
+  {key = "grief", label = "Griefer", color = "ffff6060", r = 1,    g = 0.38, b = 0.38},
+  {key = "dumb",  label = "Dumbass", color = "ffffd040", r = 1,    g = 0.82, b = 0.25},
+}
+local tagByKey = {}
+for _, t in ipairs(NS.TAGS) do tagByKey[t.key] = t end
+function NS.TagInfo(k) return tagByKey[k] end
+function NS.ValidTag(k) return type(k) == "string" and tagByKey[k] ~= nil end
+function NS.TagLabel(k) return tagByKey[k] and tagByKey[k].label end
+-- clean a tag list: known tags only, each once, in the standard order ("" for none)
+function NS.ParseTags(s)
+  if type(s) ~= "string" or s == "" then return "" end
+  local has = {}
+  for k in s:gmatch("[^,]+") do if tagByKey[k] then has[k] = true end end
+  local out = {}
+  for _, t in ipairs(NS.TAGS) do if has[t.key] then out[#out + 1] = t.key end end
+  return table.concat(out, ",")
+end
+-- the tag keys in a list, in order
+function NS.TagList(s)
+  local out = {}
+  for k in NS.ParseTags(s):gmatch("[^,]+") do out[#out + 1] = k end
+  return out
+end
+function NS.HasTag(s, k) return ("," .. NS.ParseTags(s) .. ","):find("," .. k .. ",", 1, true) ~= nil end
+-- the list with one tag switched on or off
+function NS.ToggleTag(s, k)
+  local list = NS.ParseTags(s)
+  if NS.HasTag(list, k) then
+    list = ("," .. list .. ","):gsub("," .. k .. ",", ","):sub(2, -2)
+  else
+    list = list .. "," .. k
+  end
+  return NS.ParseTags(list)
+end
+-- "[Toxic] [Ninja]" in the tags' colors, or "" for none
+function NS.TagText(s)
+  local out = {}
+  for _, k in ipairs(NS.TagList(s)) do local t = tagByKey[k]; out[#out + 1] = "|c" .. t.color .. "[" .. t.label .. "]|r" end
+  return table.concat(out, " ")
+end
+
 -- admins (GM, officers, CHogan) can edit any entry; votes are kept
-function NS.Edit(id, name, guild, desc, class)
+-- tag: a tag list ("toxic,ninja"), "" to clear tags, nil to keep the current ones
+function NS.Edit(id, name, guild, desc, class, tag)
   local e = db.e[id]
   if not e or e.x or not NS.CanDelete() then return end
   name, guild, desc = NS.Clean(name, 60), NS.Clean(guild, 40), cleanDescription(desc)
@@ -558,8 +614,9 @@ function NS.Edit(id, name, guild, desc, class)
   local m = math.max(now(), (e.m or 0) + 1)
   -- the full name is dropped on edit: the name field is what shows
   if not NS.ValidClass(class) then class = nil end
-  if NS.ApplyEntry(id, e.t, m, name, guild, e.a, desc, "", true, NS.Display(NS.MyId()), class) then
-    NS.Send(table.concat({"E", id, m, name, guild, desc, class or ""}, "\t"))
+  if tag == nil then tag = e.k or "" else tag = NS.ParseTags(tag) end
+  if NS.ApplyEntry(id, e.t, m, name, guild, e.a, desc, "", true, NS.Display(NS.MyId()), class, nil, tag) then
+    NS.Send(table.concat({"E", id, m, name, guild, desc, class or "", tag}, "\t"))
   end
   return true
 end
@@ -637,7 +694,8 @@ function NS.Sorted(filter)
   for _, id in ipairs(sorted) do
     local e = db.e[id]
     if (e.n or ""):lower():find(filter, 1, true) or (e.f or ""):lower():find(filter, 1, true)
-       or (e.d or ""):lower():find(filter, 1, true) or (e.g or ""):lower():find(filter, 1, true) then
+       or (e.d or ""):lower():find(filter, 1, true) or (e.g or ""):lower():find(filter, 1, true)
+       or (e.k and NS.TagText(e.k):lower():find(filter, 1, true)) then
       out[#out + 1] = id
     end
   end
@@ -907,6 +965,8 @@ SlashCmdList.BOOKOFDOGS = function(msg)
     NS.NameplateCmd(msg)
   elseif msg == "chat" then
     NS.ToggleChatIcons()
+  elseif msg == "alerts" then
+    NS.ToggleAlerts()
   elseif msg == "add" then
     if UnitExists("target") and UnitIsPlayer("target") then NS.ShowAddPopup("target") else print("|cff" .. NS.GOLD .. "Book of Dogs|r: target a player first.") end
   elseif msg == "status" then
