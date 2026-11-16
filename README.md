@@ -8,7 +8,7 @@ A World of Warcraft: Forever addon for guilds to keep a shared book of notable p
 - Syncs with members of the same guild on the same feed
 - Guildmates can't be added. The addon checks descriptions locally and rejects blocked terms in received entries.
 - The guild master manages editors. Officers and appointed editors can edit and delete entries.
-- Dog icon above the nameplate of anyone in the Book, even when not targeted
+- Dog icon above the nameplate of anyone in the Book, even when not targeted (on party/raid frames inside dungeons and raids, where nameplates are locked)
 - Minimap button (drag to move), `/dogs` to open
 
 ## Install
