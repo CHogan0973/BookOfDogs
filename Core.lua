@@ -192,36 +192,6 @@ function NS.FeedPrefix()
   return NS.LegacyFeed() and "" or activeSeed .. "\t"
 end
 
-function NS.FeedName() return activeSeed end
-
-function NS.FeedLabel(seed)
-  local profile = activeGuild and BookOfDogsDB.feeds[activeGuild]
-  return profile and profile.labels and profile.labels[seed or activeSeed]
-end
-
-function NS.SetFeedLabel(label)
-  if not NS.InGuildFeed() then return false, "Join a guild to label a feed." end
-  label = NS.Clean(label)
-  local _, length = label:gsub("[^\128-\191]", "")
-  if length > 32 then return false, "Enter a label of up to 32 characters." end
-  local profile = BookOfDogsDB.feeds[activeGuild]
-  profile.labels = profile.labels or {}
-  profile.labels[activeSeed] = label ~= "" and label or nil
-  NS.Changed()
-  return true
-end
-
-function NS.FeedChoices()
-  if not NS.InGuildFeed() then return {} end
-  local seeds = {}
-  for seed in pairs(BookOfDogsDB.feeds[activeGuild].books) do
-    if seed ~= DEFAULT_FEED then seeds[#seeds + 1] = seed end
-  end
-  table.sort(seeds)
-  table.insert(seeds, 1, DEFAULT_FEED)
-  return seeds
-end
-
 local rankOf, officerRank = {}, {}
 local firstCount, rosterHasSurnames, rosterReady = {}, false, false
 -- guild rank for an id, or nil if not in the guild
@@ -796,11 +766,8 @@ local loggedIn, forceRefresh
 -- entries written to a separate Dog book are merged back in on login.
 local function isBlankKey(k) return type(k) == "string" and k:sub(1, 1) == ":" end
 
-local function adoptOrphan(key)
-  local profile = BookOfDogsDB.feeds[key]
-  local orphan = profile and profile.books and profile.books[DEFAULT_FEED]
-  if not orphan then return end
-  local root = BookOfDogsDB
+-- copy one book into another (newer entries win, deletions stick)
+local function mergeBook(orphan, root)
   root.e, root.ed, root.acct, root.names = root.e or {}, root.ed or {}, root.acct or {}, root.names or {}
   for id, e in pairs(orphan.e or {}) do
     local cur = root.e[id]
@@ -813,7 +780,31 @@ local function adoptOrphan(key)
   for k, h in pairs(orphan.acct or {}) do if root.acct[k] == nil then root.acct[k] = h end end
   for k, v in pairs(orphan.names or {}) do if root.names[k] == nil then root.names[k] = v end end
   if (orphan.maxM or 0) > (root.maxM or 0) then root.maxM = orphan.maxM end
+end
+
+local function adoptOrphan(key)
+  local profile = BookOfDogsDB.feeds[key]
+  local orphan = profile and profile.books and profile.books[DEFAULT_FEED]
+  if not orphan then return end
+  mergeBook(orphan, BookOfDogsDB)
   profile.books[DEFAULT_FEED] = nil
+end
+
+-- Custom feeds (75.0.x) are gone: each guild has one book. Fold any custom-feed books
+-- back into the guild's book and drop the old feed settings.
+local function foldCustomFeeds(profile, isDog)
+  profile.books = profile.books or {}
+  for seed, book in pairs(profile.books) do
+    if seed ~= DEFAULT_FEED then
+      if isDog then mergeBook(book, BookOfDogsDB)
+      else
+        profile.books[DEFAULT_FEED] = profile.books[DEFAULT_FEED] or {}
+        mergeBook(book, profile.books[DEFAULT_FEED])
+      end
+      profile.books[seed] = nil
+    end
+  end
+  profile.seed, profile.labels = DEFAULT_FEED, nil
 end
 
 local function relatch(key)
@@ -832,6 +823,7 @@ local function refreshFeed()
     local guilds = BookOfDogsDB.feeds
     profile = guilds[key] or {seed = DEFAULT_FEED, books = {}}
     guilds[key] = profile
+    foldCustomFeeds(profile, name:lower() == LEGACY_GUILD)
     if name:lower() == LEGACY_GUILD then
       -- fold anything left in an old separate Dog book back into the main one
       for k, p in pairs(guilds) do
@@ -872,31 +864,6 @@ local function refreshFeed()
   return true
 end
 
-function NS.SelectFeed(seed)
-  if not NS.InGuildFeed() then
-    return false, "Join a guild to select a feed."
-  end
-  seed = (seed or ""):lower():match("^%s*(.-)%s*$")
-  if #seed > 64 or not seed:match("^[%w][%w%-]*$") then
-    return false, "Enter a seed of up to 64 letters, numbers, and hyphens."
-  end
-  BookOfDogsDB.feeds[activeGuild].seed = seed
-  refreshFeed()
-  return true
-end
-
-local function feedCommand(seed)
-  refreshFeed()
-  if seed then
-    local ok, reason = NS.SelectFeed(seed)
-    if not ok then print("Book of Dogs: " .. reason); return end
-  elseif not NS.InGuildFeed() then
-    print("Book of Dogs: join a guild to select a feed.")
-    return
-  end
-  print(("Book of Dogs: %s feed for <%s>. Use /dogs feed <guid> or /dogs feed default."):format(activeSeed, guildName))
-end
-
 local f = CreateFrame("Frame")
 f:RegisterEvent("ADDON_LOADED")
 f:RegisterEvent("PLAYER_LOGIN")
@@ -924,9 +891,7 @@ end)
 SLASH_BOOKOFDOGS1, SLASH_BOOKOFDOGS2 = "/dogs", "/bookofdogs"
 SlashCmdList.BOOKOFDOGS = function(msg)
   msg = (msg or ""):lower():match("^%s*(.-)%s*$")
-  if msg == "feed" or msg:match("^feed%s") then
-    feedCommand(msg:match("^feed%s+(.+)$"))
-  elseif msg == "sync" then
+  if msg == "sync" then
     NS.RequestSync(true)
   elseif msg == "rebuild" then
     if not NS.InGuildFeed() then return end
@@ -946,8 +911,8 @@ SlashCmdList.BOOKOFDOGS = function(msg)
     if UnitExists("target") and UnitIsPlayer("target") then NS.ShowAddPopup("target") else print("|cff" .. NS.GOLD .. "Book of Dogs|r: target a player first.") end
   elseif msg == "status" then
     local n = 0; for _, e in pairs(db.e) do if not e.x then n = n + 1 end end
-    print(("|cff%sBook of Dogs|r v" .. ((C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata)(ADDON, "Version") or "?") .. ": %d entries. Guild: %s. Feed: %s. Can delete: %s. Guild sync: %s."):format(NS.GOLD, n,
-      guildName or "none", activeSeed or "none", NS.CanDelete() and "yes" or "no", NS.CommStatus()))
+    print(("|cff%sBook of Dogs|r v" .. ((C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata)(ADDON, "Version") or "?") .. ": %d entries. Guild: %s. Can delete: %s. Guild sync: %s."):format(NS.GOLD, n,
+      guildName or "none", NS.CanDelete() and "yes" or "no", NS.CommStatus()))
     local known = 0; for _ in pairs(db.acct or {}) do known = known + 1 end
     print(("|cff%sBook of Dogs|r votes: BattleTag %s; %d characters linked to accounts; untagged votes %s."):format(
       NS.GOLD, NS.MyAcct() and "read (votes count per account)" or "NOT readable (your votes count per character)",
