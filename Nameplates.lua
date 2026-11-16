@@ -1,7 +1,8 @@
 -- Book of Dogs: a dog icon above the nameplate of anyone who is in the Book,
 -- whether or not you are targeting them. Works with the default nameplates and
 -- with nameplate addons (the icon hangs off the base nameplate, not Blizzard's
--- UnitFrame, which replacement addons often hide).
+-- UnitFrame, which replacement addons often hide). In dungeons and raids the game
+-- locks friendly nameplates, so the icon shows on party and raid frames there.
 --   /dogs icons          show / hide the icons
 --   /dogs plates         turn on nameplates for all nearby players (so every dog gets an icon)
 --   /dogs icon 32 10     icon size and height above the plate (defaults 28 and 18)
@@ -73,8 +74,72 @@ f:SetScript("OnEvent", function(_, event, unit)
   end
 end)
 
+------------------------------------------------------------------------
+-- party and raid frames. Inside dungeons and raids the game locks friendly
+-- nameplates (addons can't touch them), so the dog shows on group frames instead.
+------------------------------------------------------------------------
+local groupFrames = setmetatable({}, {__mode = "k"})
+
+local function isPlateUnit(unit) return type(unit) == "string" and unit:find("^nameplate") ~= nil end
+
+local function updateGroup(frame)
+  if not frame or (frame.IsForbidden and frame:IsForbidden()) then return end
+  local unit = frame.unit or frame.displayedUnit or (frame.GetAttribute and frame:GetAttribute("unit"))
+  if isPlateUnit(unit) then return end
+  groupFrames[frame] = true
+  local holder = frame.BookOfDogsGroupIcon
+  local show = not (BookOfDogsDB and BookOfDogsDB.npHide) and frame:IsShown() and isDog(unit)
+  if not show then
+    if holder then holder:Hide() end
+    return
+  end
+  if not holder then
+    holder = CreateFrame("Frame", nil, frame)
+    holder:SetFrameLevel((frame:GetFrameLevel() or 1) + 10)
+    holder:SetSize(16, 16)
+    holder:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -2, -2)
+    local tex = holder:CreateTexture(nil, "OVERLAY")
+    tex:SetAllPoints()
+    tex:SetTexture(ICON)
+    frame.BookOfDogsGroupIcon = holder
+  end
+  holder:Show()
+end
+
+local function eachGroupFrame(fn)
+  for i = 1, 4 do
+    local pf = _G["PartyMemberFrame" .. i]
+    if pf then fn(pf) end
+  end
+  if PartyFrame and PartyFrame.PartyMemberFramePool and PartyFrame.PartyMemberFramePool.EnumerateActive then
+    for pf in PartyFrame.PartyMemberFramePool:EnumerateActive() do fn(pf) end
+  end
+  for i = 1, 5 do local cf = _G["CompactPartyFrameMember" .. i]; if cf then fn(cf) end end
+  for i = 1, 40 do local cf = _G["CompactRaidFrame" .. i]; if cf then fn(cf) end end
+  for frame in pairs(groupFrames) do fn(frame) end
+end
+
+local function refreshGroups()
+  eachGroupFrame(function(frame) pcall(updateGroup, frame) end)
+end
+
+-- Blizzard's raid-style frames (party and raid) all pass through this when a name changes
+if hooksecurefunc and CompactUnitFrame_UpdateName then
+  hooksecurefunc("CompactUnitFrame_UpdateName", function(frame) pcall(updateGroup, frame) end)
+end
+
+local g = CreateFrame("Frame")
+g:RegisterEvent("GROUP_ROSTER_UPDATE")
+g:RegisterEvent("PLAYER_ENTERING_WORLD")
+g:RegisterEvent("UNIT_NAME_UPDATE")
+g:SetScript("OnEvent", function()
+  -- let Blizzard lay out its frames first
+  if C_Timer and C_Timer.After then C_Timer.After(0.5, refreshGroups) else refreshGroups() end
+end)
+
 -- icons update when the Book changes (new entry, delete, sync)
 NS.listeners[#NS.listeners + 1] = refreshAll
+NS.listeners[#NS.listeners + 1] = refreshGroups
 
 local function say(msg) print(("|cff%sBook of Dogs|r: %s"):format(NS.GOLD, msg)) end
 
@@ -83,7 +148,8 @@ function NS.NameplateCmd(msg)
   if msg == "icons" then
     BookOfDogsDB.npHide = not BookOfDogsDB.npHide
     refreshAll()
-    say("nameplate icons " .. (BookOfDogsDB.npHide and "hidden" or "shown") .. ".")
+    refreshGroups()
+    say("dog icons " .. (BookOfDogsDB.npHide and "hidden" or "shown") .. " (nameplates and party/raid frames).")
   elseif msg == "plates" then
     if InCombatLockdown() then say("can't change nameplate settings in combat."); return end
     for _, cv in ipairs({"nameplateShowAll", "nameplateShowEnemies", "nameplateShowFriends"}) do
