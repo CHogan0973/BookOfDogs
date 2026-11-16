@@ -3,7 +3,8 @@
 -- with nameplate addons (the icon hangs off the base nameplate, not Blizzard's
 -- UnitFrame, which replacement addons often hide). In dungeons and raids the game
 -- locks friendly nameplates, so the icon shows on party and raid frames there.
---   /dogs icons          show / hide the icons
+--   /dogs icons          show / hide the icons (nameplates and party/raid frames)
+--   /dogs frames         show / hide just the party/raid frame icons
 --   /dogs plates         turn on nameplates for all nearby players (so every dog gets an icon)
 --   /dogs icon 32 10     icon size and height above the plate (defaults 28 and 18)
 local ADDON, NS = ...
@@ -88,7 +89,7 @@ local function updateGroup(frame)
   if isPlateUnit(unit) then return end
   groupFrames[frame] = true
   local holder = frame.BookOfDogsGroupIcon
-  local show = not (BookOfDogsDB and BookOfDogsDB.npHide) and frame:IsShown() and isDog(unit)
+  local show = not (BookOfDogsDB and (BookOfDogsDB.npHide or BookOfDogsDB.frameHide)) and frame:IsShown() and isDog(unit)
   if not show then
     if holder then holder:Hide() end
     return
@@ -145,7 +146,11 @@ local function say(msg) print(("|cff%sBook of Dogs|r: %s"):format(NS.GOLD, msg))
 
 function NS.NameplateCmd(msg)
   msg = msg or ""
-  if msg == "icons" then
+  if msg == "frames" then
+    BookOfDogsDB.frameHide = not BookOfDogsDB.frameHide
+    refreshGroups()
+    say("party/raid frame icons " .. (BookOfDogsDB.frameHide and "hidden (nameplate icons unchanged)." or "shown."))
+  elseif msg == "icons" then
     BookOfDogsDB.npHide = not BookOfDogsDB.npHide
     refreshAll()
     refreshGroups()

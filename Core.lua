@@ -562,6 +562,7 @@ NS.TAGS = {
   {key = "scam",  label = "Scammer", color = "ffff3030", r = 1,    g = 0.19, b = 0.19},
   {key = "grief", label = "Griefer", color = "ffff6060", r = 1,    g = 0.38, b = 0.38},
   {key = "dumb",  label = "Dumbass", color = "ffffd040", r = 1,    g = 0.82, b = 0.25},
+  {key = "kos",   label = "KOS",     color = "ffff40c0", r = 1,    g = 0.25, b = 0.75}, -- kill on sight
 }
 local tagByKey = {}
 for _, t in ipairs(NS.TAGS) do tagByKey[t.key] = t end
@@ -961,7 +962,7 @@ SlashCmdList.BOOKOFDOGS = function(msg)
     NS.DebugTarget()
   elseif msg == "minimap" then
     NS.ToggleMinimap()
-  elseif msg == "icons" or msg == "plates" or msg == "icon" or msg:match("^icon%s") then
+  elseif msg == "icons" or msg == "frames" or msg == "plates" or msg == "icon" or msg:match("^icon%s") then
     NS.NameplateCmd(msg)
   elseif msg == "chat" then
     NS.ToggleChatIcons()
