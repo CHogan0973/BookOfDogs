@@ -182,8 +182,10 @@ function NS.InGuildFeed()
   return activeGuild ~= nil and activeGuild == currentGuild()
 end
 
+-- Any guild named Dog reads and writes the original book (no per-realm pinning, so
+-- nobody can end up on an empty copy).
 function NS.LegacyFeed()
-  return activeGuild ~= nil and activeGuild == BookOfDogsDB.legacyGuild and activeSeed == DEFAULT_FEED
+  return activeGuild ~= nil and guildName ~= nil and guildName:lower() == LEGACY_GUILD and activeSeed == DEFAULT_FEED
 end
 
 function NS.FeedPrefix()
@@ -266,7 +268,6 @@ function NS.ScanRoster()
   end
   wipe(officerRank)
   if db then NS.Normalize() end
-  if rosterReady and NS.CheckLegacyGuild then NS.CheckLegacyGuild() end
 end
 -- Check the active guild's name and roster.
 function NS.IsGuildmate(key, guild)
@@ -789,13 +790,10 @@ end
 ------------------------------------------------------------------------
 local loggedIn, forceRefresh
 
--- The original Dog book lives at the top of BookOfDogsDB (so older releases can read it)
--- and belongs to one guild named Dog: BookOfDogsDB.legacyGuild. That used to be fixed
--- to the first Dog guild seen, which could be wrong (an alt in another realm's Dog, or
--- a blank realm while loading), leaving the real Dog on an empty book that couldn't sync.
--- It now heals itself: a blank-realm pick is replaced at once, and a Dog guild whose
--- roster matches the people in the book (authors, voters, editors) better than the
--- current pick takes over. Anything written to the wrong book meanwhile is merged back.
+-- The original Dog book lives at the top of BookOfDogsDB (so older releases can read it).
+-- Releases 75.0.0-75.0.3 pinned it to the first Dog guild seen, which could be wrong and
+-- left the real Dog on an empty separate book. Now every guild named Dog uses it, and any
+-- entries written to a separate Dog book are merged back in on login.
 local function isBlankKey(k) return type(k) == "string" and k:sub(1, 1) == ":" end
 
 local function adoptOrphan(key)
@@ -827,29 +825,6 @@ local function relatch(key)
   forceRefresh = true
 end
 
--- how many people in this guild's roster appear in the original Dog book
-local function rootOverlap()
-  if not rosterReady then return nil end
-  local members = {}
-  for id in pairs(rankOf) do
-    local b = base(id)
-    members[b] = true
-    if not rosterHasSurnames then members[b:match("^%S+") or b] = true end
-  end
-  local seen, n = {}, 0
-  local function check(who)
-    if type(who) ~= "string" or who:sub(1, 1) == "#" then return end
-    local b = base(who)
-    if b == "" or seen[b] then return end
-    if members[b] or (not rosterHasSurnames and members[b:match("^%S+") or b]) then seen[b] = true; n = n + 1 end
-  end
-  for _, e in pairs(BookOfDogsDB.e or {}) do
-    if not e.x then check(e.a); for k in pairs(e.v or {}) do check(k) end end
-  end
-  for k in pairs(BookOfDogsDB.ed or {}) do check(k) end
-  return n
-end
-
 local function refreshFeed()
   local key, name = currentGuild()
   local profile
@@ -858,8 +833,12 @@ local function refreshFeed()
     profile = guilds[key] or {seed = DEFAULT_FEED, books = {}}
     guilds[key] = profile
     if name:lower() == LEGACY_GUILD then
-      local lg = BookOfDogsDB.legacyGuild
-      if not lg or isBlankKey(lg) then relatch(key) end
+      -- fold anything left in an old separate Dog book back into the main one
+      for k, p in pairs(guilds) do
+        if k:match(":(.*)$") == LEGACY_GUILD and p.books and p.books[DEFAULT_FEED] then adoptOrphan(k) end
+      end
+      if isBlankKey(BookOfDogsDB.legacyGuild) then guilds[BookOfDogsDB.legacyGuild] = nil end
+      if BookOfDogsDB.legacyGuild ~= key then relatch(key) end
     end
   end
   local seed = profile and profile.seed
@@ -891,24 +870,6 @@ local function refreshFeed()
   if NS.CloseFeedDialogs then NS.CloseFeedDialogs(guildChanged) end
   NS.Changed()
   return true
-end
-
--- after the roster loads: is this Dog guild a better match for the original book?
-function NS.CheckLegacyGuild()
-  local key, name = currentGuild()
-  if not key or activeGuild ~= key or name:lower() ~= LEGACY_GUILD then return end
-  local score = rootOverlap()
-  if not score then return end
-  if key == BookOfDogsDB.legacyGuild then
-    if score > (BookOfDogsDB.legacyScore or 0) then BookOfDogsDB.legacyScore = score end
-    return
-  end
-  if score >= 2 and score > (BookOfDogsDB.legacyScore or 0) then
-    relatch(key)
-    BookOfDogsDB.legacyScore = score
-    refreshFeed()
-    print("|cff" .. NS.GOLD .. "Book of Dogs|r: found the guild's book of dogs for <" .. name .. "> and restored it.")
-  end
 end
 
 function NS.SelectFeed(seed)
