@@ -116,6 +116,11 @@ end
 
 -- the window shell: Blizzard's ButtonFrameTemplate (portrait, title bar, close
 -- button, inset). If a client lacks it, fall back to a plain bordered frame.
+-- Blizzard's close buttons call HideUIPanel, which the game blocks for addon windows in
+-- combat; ours just hide the window, so it can always be closed.
+local function plainClose(btn, win)
+  if btn and btn.SetScript then btn:SetScript("OnClick", function() win:Hide() end) end
+end
 local function shell()
   local ok, f = pcall(CreateFrame, "Frame", "BookOfDogsFrame", UIParent, "ButtonFrameTemplate")
   if ok and f and f.Inset then
@@ -124,6 +129,7 @@ local function shell()
     if f.SetPortraitToAsset then f:SetPortraitToAsset(icon)
     elseif f.portrait and SetPortraitToTexture then SetPortraitToTexture(f.portrait, icon)
     elseif f.PortraitContainer and f.PortraitContainer.portrait then f.PortraitContainer.portrait:SetTexture(icon) end
+    plainClose(f.CloseButton or _G["BookOfDogsFrameCloseButton"], f)
     return f, f.Inset
   end
   if not ok or type(f) ~= "table" then f = CreateFrame("Frame", "BookOfDogsFrame", UIParent, "BackdropTemplate") end
@@ -132,6 +138,7 @@ local function shell()
                  tile = true, tileSize = 32, edgeSize = 32, insets = {left = 8, right = 8, top = 8, bottom = 8}})
   local t = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge"); t:SetPoint("TOP", 0, -14); t:SetText("Book of Dogs")
   local c = CreateFrame("Button", nil, f, "UIPanelCloseButton"); c:SetPoint("TOPRIGHT", -4, -4)
+  plainClose(c, f)
   local inset = CreateFrame("Frame", nil, f)
   inset:SetPoint("TOPLEFT", 12, -62); inset:SetPoint("BOTTOMRIGHT", -12, 36)
   return f, inset
@@ -584,6 +591,7 @@ local function buildEditors()
   local sub = edWin:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall"); sub:SetPoint("TOP", 0, -40)
   sub:SetText("Editors can add, edit and delete entries.")
   local close = CreateFrame("Button", nil, edWin, "UIPanelCloseButton"); close:SetPoint("TOPRIGHT", -6, -6)
+  plainClose(close, edWin)
   local input = CreateFrame("EditBox", nil, edWin, "InputBoxTemplate")
   input:SetSize(170, 20); input:SetPoint("TOPLEFT", 30, -64); input:SetAutoFocus(false); input:SetMaxLetters(60)
   local hint = input:CreateFontString(nil, "ARTWORK", "GameFontDisable"); hint:SetPoint("LEFT", 2, 0); hint:SetText("Guild member name")
