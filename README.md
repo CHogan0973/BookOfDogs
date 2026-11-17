@@ -17,6 +17,6 @@ A World of Warcraft: Forever addon for guilds to keep a shared book of notable p
 Copy the `BookOfDogs` folder into `World of Warcraft\_forever_\Interface\AddOns\` and fully restart WoW.
 
 ## Commands
-`/dogs` open · `/dogs add` add target · `/dogs sync` pull the whole book · `/dogs rebuild` reset your copy from the guild · `/dogs status` sync info · `/dogs minimap` show/hide the button · `/dogs icons` show/hide nameplate icons · `/dogs frames` show/hide the party/raid frame icons · `/dogs chat` show/hide chat icons · `/dogs alerts` turn heads-up alerts on/off · `/dogs plates` turn on nameplates for all nearby players · `/dogs icon <size> <height>` adjust the icon
+`/dogs` open · `/dogs add` add target · `/dogs sync` pull the whole book · `/dogs rebuild` reset your copy from the guild · `/dogs status` sync info · `/dogs debug frames` check group frame/nameplate icons · `/dogs minimap` show/hide the button · `/dogs icons` show/hide nameplate icons · `/dogs frames` show/hide the party/raid frame icons · `/dogs chat` show/hide chat icons · `/dogs alerts` turn heads-up alerts on/off · `/dogs plates` turn on nameplates for all nearby players · `/dogs icon <size> <height>` adjust the icon
 
 Created by CHogan. Main contributors: Oasli, Relreo.

@@ -17,17 +17,10 @@ local function entriesFor(name, full)
   return NS.FindEntries(NS.Key(nm:match("^%S+")), full)
 end
 
--- entries for a unit (party1, raid3, NPC = trade partner)
+-- entries for a unit (party1, raid3, NPC = trade partner); see NS.UnitEntries
 local function entriesForUnit(unit)
-  if not unit or not UnitExists(unit) or not UnitIsPlayer(unit) then return {}, nil end
-  local first, second = UnitName(unit)
-  if not first or secret(first) or secret(second) then return {}, nil end
-  local full = NS.FullFrom(first, second)
-  if not (full and full:find(" ", 1, true)) and GetUnitName then
-    local ok, gn = pcall(GetUnitName, unit, false)
-    if ok and type(gn) == "string" and not secret(gn) and gn:find(" ", 1, true) then full = gn:match("^[^%-]+") end
-  end
-  return entriesFor(first, full and full:find(" ", 1, true) and full or nil), full or first
+  local hits, shown = NS.UnitEntries(unit)
+  return hits, shown
 end
 
 local told = {} -- "kind|name" -> time

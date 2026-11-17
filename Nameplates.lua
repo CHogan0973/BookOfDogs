@@ -16,10 +16,8 @@ local function size() return (BookOfDogsDB and BookOfDogsDB.npSize) or DEF_SIZE 
 local function yoff() return (BookOfDogsDB and BookOfDogsDB.npY) or DEF_Y end
 
 local function isDog(unit)
-  if not unit or not UnitExists(unit) or not UnitIsPlayer(unit) or not NS.InGuildFeed() then return false end
-  local name, second = UnitName(unit)
-  if not name or secret(name) or secret(second) then return false end
-  return #NS.FindEntries(NS.Key(name), NS.FullFrom(name, second)) > 0
+  local ok, hits = pcall(NS.UnitEntries, unit)
+  return ok and #hits > 0
 end
 
 local function place(holder, plate)
@@ -108,16 +106,24 @@ local function updateGroup(frame)
 end
 
 local function eachGroupFrame(fn)
+  local seen = {}
+  local function each(frame) if frame and not seen[frame] then seen[frame] = true; fn(frame) end end
+  -- classic party frames, and the newer PartyFrame.MemberFrame1-4
   for i = 1, 4 do
-    local pf = _G["PartyMemberFrame" .. i]
-    if pf then fn(pf) end
+    each(_G["PartyMemberFrame" .. i])
+    if PartyFrame then each(PartyFrame["MemberFrame" .. i]) end
   end
   if PartyFrame and PartyFrame.PartyMemberFramePool and PartyFrame.PartyMemberFramePool.EnumerateActive then
-    for pf in PartyFrame.PartyMemberFramePool:EnumerateActive() do fn(pf) end
+    for pf in PartyFrame.PartyMemberFramePool:EnumerateActive() do each(pf) end
   end
-  for i = 1, 5 do local cf = _G["CompactPartyFrameMember" .. i]; if cf then fn(cf) end end
-  for i = 1, 40 do local cf = _G["CompactRaidFrame" .. i]; if cf then fn(cf) end end
-  for frame in pairs(groupFrames) do fn(frame) end
+  -- raid-style frames: party, raid ("keep groups together" names them by group), and pets skipped
+  for i = 1, 5 do each(_G["CompactPartyFrameMember" .. i]) end
+  for i = 1, 40 do each(_G["CompactRaidFrame" .. i]) end
+  for gr = 1, 8 do for m = 1, 5 do each(_G["CompactRaidGroup" .. gr .. "Member" .. m]) end end
+  if CompactRaidFrameContainer and CompactRaidFrameContainer.ApplyToFrames then
+    pcall(CompactRaidFrameContainer.ApplyToFrames, CompactRaidFrameContainer, "normal", each)
+  end
+  for frame in pairs(groupFrames) do each(frame) end
 end
 
 local function refreshGroups()
@@ -125,8 +131,10 @@ local function refreshGroups()
 end
 
 -- Blizzard's raid-style frames (party and raid) all pass through this when a name changes
-if hooksecurefunc and CompactUnitFrame_UpdateName then
-  hooksecurefunc("CompactUnitFrame_UpdateName", function(frame) pcall(updateGroup, frame) end)
+if hooksecurefunc then
+  for _, fn in ipairs({"CompactUnitFrame_UpdateName", "CompactUnitFrame_SetUnit", "CompactUnitFrame_UpdateAll"}) do
+    if _G[fn] then hooksecurefunc(fn, function(frame) pcall(updateGroup, frame) end) end
+  end
 end
 
 local g = CreateFrame("Frame")
@@ -134,9 +142,44 @@ g:RegisterEvent("GROUP_ROSTER_UPDATE")
 g:RegisterEvent("PLAYER_ENTERING_WORLD")
 g:RegisterEvent("UNIT_NAME_UPDATE")
 g:SetScript("OnEvent", function()
-  -- let Blizzard lay out its frames first
-  if C_Timer and C_Timer.After then C_Timer.After(0.5, refreshGroups) else refreshGroups() end
+  -- let Blizzard lay out its frames first (and again a little later: frames can be built late)
+  if C_Timer and C_Timer.After then
+    C_Timer.After(0.5, refreshGroups); C_Timer.After(3, refreshGroups)
+  else
+    refreshGroups()
+  end
 end)
+
+-- /dogs debug frames: what the addon sees for each group member, their frames and nameplates
+function NS.DebugFrames()
+  local function p(msg) print("|cff" .. NS.GOLD .. "BoD frames|r " .. msg) end
+  local raid = IsInRaid and IsInRaid()
+  local n = raid and (GetNumGroupMembers() or 0) or ((GetNumSubgroupMembers and GetNumSubgroupMembers()) or 0)
+  local inInst, instType = IsInInstance()
+  p(("in group: %s, members: %d, instance: %s, icons hidden: %s, frame icons hidden: %s"):format(
+    tostring(IsInGroup and IsInGroup()), n, inInst and tostring(instType) or "no",
+    tostring(BookOfDogsDB.npHide and true or false), tostring(BookOfDogsDB.frameHide and true or false)))
+  local byUnit = {}
+  eachGroupFrame(function(frame)
+    if frame.IsForbidden and frame:IsForbidden() then return end
+    local u = frame.unit or frame.displayedUnit or (frame.GetAttribute and frame:GetAttribute("unit"))
+    if type(u) == "string" and not isPlateUnit(u) then
+      local name = (frame.GetName and frame:GetName()) or "unnamed frame"
+      local icon = frame.BookOfDogsGroupIcon and frame.BookOfDogsGroupIcon:IsShown() and "icon ON" or "no icon"
+      byUnit[u] = (byUnit[u] and (byUnit[u] .. ", ") or "") .. name .. (frame:IsShown() and "" or " (hidden)") .. " " .. icon
+    end
+  end)
+  for i = 1, n do
+    local unit = raid and ("raid" .. i) or ("party" .. i)
+    local ok, hits, shown, why = pcall(NS.UnitEntries, unit)
+    local plate = C_NamePlate and C_NamePlate.GetNamePlateForUnit and C_NamePlate.GetNamePlateForUnit(unit)
+    p(("%s: %s -> %s | frames: %s | nameplate: %s"):format(unit, tostring(shown or "?"),
+      not ok and ("error: " .. tostring(hits)) or (#hits > 0 and "|cff40ff40IN BOOK|r" or ("|cffff6060" .. tostring(why) .. "|r")),
+      byUnit[unit] or "none found", plate and "available" or "not available (locked or off)"))
+  end
+  if n == 0 then p("not in a group. Target a player and try /dogs debug for name details.") end
+  refreshGroups(); refreshAll()
+end
 
 -- icons update when the Book changes (new entry, delete, sync)
 NS.listeners[#NS.listeners + 1] = refreshAll

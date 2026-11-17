@@ -653,6 +653,24 @@ function NS.Delete(id)
   if NS.ApplyDelete(id, x) then NS.Send(("D\t%s\t%d"):format(id, x)) end
 end
 
+-- Book entries for a unit (party1, raid3, nameplate2, NPC...). The game sometimes gives
+-- only a first name for a unit, so the full name is also tried from GetUnitName.
+-- Returns the entry ids, the name used, and why nothing matched (for /dogs debug frames).
+function NS.UnitEntries(unit)
+  if not unit or not UnitExists(unit) then return {}, nil, "no unit" end
+  if not UnitIsPlayer(unit) then return {}, nil, "not a player" end
+  if not NS.InGuildFeed() then return {}, nil, "no guild book" end
+  local first, second = UnitName(unit)
+  if not first or (issecretvalue and (issecretvalue(first) or issecretvalue(second))) then return {}, nil, "name hidden by the game (secret)" end
+  local full = NS.FullFrom(first, second)
+  if not (full and full:find(" ", 1, true)) and GetUnitName then
+    local ok, gn = pcall(GetUnitName, unit, false)
+    if ok and type(gn) == "string" and not (issecretvalue and issecretvalue(gn)) and gn:find(" ", 1, true) then full = gn:match("^[^%-]+") end
+  end
+  if not (full and full:find(" ", 1, true)) then full = nil end
+  local hits = NS.FindEntries(NS.Key(first), full)
+  return hits, full or first, #hits == 0 and "not in the Book" or nil
+end
 -- entries about a player (by full name when known, else by name), best score first
 function NS.FindEntries(key, full)
   local out = {}
@@ -664,7 +682,10 @@ function NS.FindEntries(key, full)
       if fullCand then
         hit = e.f == fullCand or e.n == fullCand or (not e.f and e.n == fullCand:match("^%S+"))
       else
+        -- only a first name to go on: match entries whose full name starts with it
+        -- (e.f from a right-click add, or a full name typed into e.n)
         hit = e.n == key or (e.f ~= nil and e.f:match("^%S+") == key)
+              or (e.f == nil and e.n:find(" ", 1, true) ~= nil and e.n:match("^%S+") == key)
       end
       if hit then out[#out + 1] = id end
     end
@@ -958,6 +979,8 @@ SlashCmdList.BOOKOFDOGS = function(msg)
     wipe(db.e); db.maxM = 0; NS.dirty = true; NS.Changed()
     print("|cff" .. NS.GOLD .. "Book of Dogs|r: cleared your copy; pulling the whole book from guildmates online...")
     NS.RequestSync(true)
+  elseif msg == "debug frames" or msg == "debugframes" then
+    NS.DebugFrames()
   elseif msg == "debug" then
     NS.DebugTarget()
   elseif msg == "minimap" then
