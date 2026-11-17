@@ -158,7 +158,11 @@ local function build()
   search:SetSize(200, 20); search:SetPoint("TOPRIGHT", -14, -36); search:SetAutoFocus(false)
   search:HookScript("OnTextChanged", function() FauxScrollFrame_SetOffset(scroll, 0); scroll:SetVerticalScroll(0); refresh() end)
   local sub = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  sub:SetPoint("TOPLEFT", 66, -38); sub:SetText("The guild's book of dogs")
+  sub:SetPoint("TOPLEFT", 66, -37); sub:SetText("#RookStrong")
+  -- bold yellow: the large game font with an outline, in the game's gold
+  local font, fsize = (GameFontNormalLarge or sub):GetFont()
+  if font then sub:SetFont(font, (fsize or 16), "OUTLINE") end
+  sub:SetTextColor(1, 0.82, 0)
 
   scroll = CreateFrame("ScrollFrame", "BookOfDogsScroll", inset, "FauxScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", 0, -4); scroll:SetPoint("BOTTOMRIGHT", -26, 4)
