@@ -144,6 +144,7 @@ function NS.RequestSync(full)
   if not NS.InGuildFeed() then return end
   -- replies to our own request are trusted for 10 minutes (vote lists, deletes, editors)
   NS.askedAt = GetTime()
+  NS.stats.asked = (NS.stats.asked or 0) + 1
   hello(full and 0 or (NS.DB().maxM or 0), true)
   if full then print("|cff" .. NS.GOLD .. "Book of Dogs|r: asked the guild for the whole book.") end
 end
@@ -158,9 +159,18 @@ local function sendAcctList()
   if list ~= "" then NS.Send(table.concat({"K", list}, SEP)) end
 end
 -- withBook = false: only the account table is sent (their book already matches ours)
+local function liveCount()
+  local n = 0
+  for _, e in pairs(NS.DB().e) do if not e.x then n = n + 1 end end
+  return n
+end
+NS.LiveCount = liveCount
 local function reply(requester, since, followup, withBook)
   pendingReply[requester] = nil
-  NS.Send(table.concat({"R", requester}, SEP)) -- tells everyone else to stand down
+  if withBook and liveCount() == 0 then withBook = false end -- nothing to give
+  -- only someone actually sending the book tells the others to stand down, so an
+  -- empty or partial copy answering first can't leave the asker with nothing
+  if withBook then NS.Send(table.concat({"R", requester}, SEP)) end
   if withBook then
     for id, e in pairs(NS.DB().e) do
       if (e.m or 0) > since then
@@ -295,13 +305,24 @@ handlers.H = function(sender, since, theirDigest, followup, ver, theirClassDiges
   else
     return -- nothing they don't have
   end
-  -- wait a random moment; whoever answers first, the rest stay quiet
-  pendingReply[sender] = C_Timer.NewTimer(1 + math.random() * 4, function() reply(sender, since, follow, withBook) end)
+  -- wait a moment; whoever answers first, the rest stay quiet. Bigger books wait less,
+  -- so the fullest copy online usually answers, and a copy with fewer entries than the
+  -- asker's (or only the account table to share) waits longest.
+  local mine = liveCount()
+  local theirs = tonumber((theirDigest or ""):match("^(%d+):")) or 0
+  local delay = 0.5 + math.random() + 4 / (1 + mine)
+  if mine < theirs then delay = delay + 4 end
+  if not withBook then delay = delay + 6 end
+  pendingReply[sender] = C_Timer.NewTimer(delay, function() reply(sender, since, follow, withBook) end)
 end
 handlers.R = function(sender, requester)
   local t = pendingReply[requester]
   if t then t:Cancel(); pendingReply[requester] = nil end
-  if NS.Id(requester) == NS.MyId() then NS.inReplyFrom, NS.inReplyUntil = sender, GetTime() + 600 end
+  if NS.Id(requester) == NS.MyId() then
+    NS.inReplyFrom, NS.inReplyUntil = sender, GetTime() + 600
+    NS.stats.replies = (NS.stats.replies or 0) + 1
+    NS.stats.lastReplyFrom = NS.Display(sender)
+  end
 end
 
 local function handle(sender, msg)
@@ -379,6 +400,13 @@ function NS.CommFeedChanged()
   C_Timer.After(10, function()
     if revision ~= NS.FeedRevision or not NS.InGuildFeed() then return end
     NS.RequestSync(false)
+    -- still empty? ask again a few times: the guildmate who has the book may still be
+    -- loading in, or may log in a bit later
+    for _, wait in ipairs({30, 110, 230}) do
+      C_Timer.After(wait, function()
+        if revision == NS.FeedRevision and NS.InGuildFeed() and liveCount() == 0 then NS.RequestSync(false) end
+      end)
+    end
     if NS.IsMainAdmin() then NS.SendEditors() end -- the main admin keeps everyone's editor list current
     -- say which BattleTag account I am; Battle.net can connect a little after login, so try again
     if not NS.AnnounceAcct() then

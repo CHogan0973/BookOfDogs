@@ -35,6 +35,29 @@ local function refresh()
   if not frame or not frame:IsShown() then return end
   list = NS.Sorted(search:GetText())
   countText:SetText(#list .. (#list == 1 and " entry" or " entries"))
+  -- an empty book says why, so a missing sync can be spotted at a glance
+  if frame.empty then
+    local total = NS.LiveCount and NS.LiveCount() or #list
+    if total > 0 or (search:GetText() or "") ~= "" then
+      frame.empty:SetShown(#list == 0 and total > 0)
+      frame.empty:SetText(#list == 0 and "No entries match your search." or "")
+    else
+      local st = NS.stats or {}
+      local msg
+      if not NS.InGuildFeed() then
+        msg = "Join the guild to see its Book of Dogs."
+      elseif (st.asked or 0) == 0 then
+        msg = "This character's copy is empty.\nAsking online guildmates for the book in a few seconds..."
+      elseif (st.recv or 0) == 0 then
+        msg = ("This character's copy is empty.\nAsked %d time(s), but no Book of Dogs messages have arrived yet.\n" ..
+               "A guildmate with the addon needs to be online. It keeps asking on its own, or click Sync."):format(st.asked)
+      else
+        msg = ("This character's copy is empty.\nAsked %d time(s); %d message(s) received%s.\nThe book should fill in shortly. If not, click Sync."):format(
+          st.asked, st.recv, st.lastReplyFrom and (", answered by " .. st.lastReplyFrom) or "")
+      end
+      frame.empty:SetText(msg); frame.empty:Show()
+    end
+  end
   visibleRows = math.min(MAXROWS, math.max(1, math.floor((frame:GetHeight() - CHROME_H - INSET_PAD) / ROWH)))
   local showBar = FauxScrollFrame_Update(scroll, #list, visibleRows, ROWH)
   local off = FauxScrollFrame_GetOffset(scroll)
@@ -171,6 +194,9 @@ local function build()
   if font then sub:SetFont(font, (fsize or 16), "OUTLINE") end
   sub:SetTextColor(1, 0.82, 0)
 
+  frame.empty = inset:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  frame.empty:SetPoint("CENTER", 0, 20); frame.empty:SetWidth(420); frame.empty:SetJustifyH("CENTER")
+  frame.empty:SetTextColor(0.85, 0.85, 0.85); frame.empty:Hide()
   scroll = CreateFrame("ScrollFrame", "BookOfDogsScroll", inset, "FauxScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", 0, -4); scroll:SetPoint("BOTTOMRIGHT", -26, 4)
   scroll:SetScript("OnVerticalScroll", function(self, off) FauxScrollFrame_OnVerticalScroll(self, off, ROWH, refresh) end)
@@ -303,6 +329,13 @@ local function build()
   frame:HookScript("OnSizeChanged", function() refresh() end)
 
   frame:SetScript("OnShow", function() PlaySound(SOUNDKIT and SOUNDKIT.IG_SPELLBOOK_OPEN or 829); refresh() end)
+  local tick = 0
+  frame:SetScript("OnUpdate", function(_, dt)
+    tick = tick + dt
+    if tick < 2 then return end
+    tick = 0
+    if frame.empty and frame.empty:IsShown() then refresh() end
+  end)
   frame:SetScript("OnHide", function() PlaySound(SOUNDKIT and SOUNDKIT.IG_SPELLBOOK_CLOSE or 830) end)
   frame:Hide()
 end

@@ -1006,6 +1006,8 @@ SlashCmdList.BOOKOFDOGS = function(msg)
     local r2 = C_ChatInfo.InChatMessagingLockdown and tostring(C_ChatInfo.InChatMessagingLockdown()) or "n/a"
     print(("|cff%sBook of Dogs|r debug: sent %d, failed %d (last result %s), queued %d, received %d, from chat %d. Restricted=%s Lockdown=%s"):format(
       NS.GOLD, st.sent or 0, st.failed or 0, tostring(st.lastRes), st.queued or 0, st.recv or 0, st.chat or 0, r1, r2))
+    print(("|cff%sBook of Dogs|r sync: asked %d time(s), answered %d time(s)%s."):format(NS.GOLD, st.asked or 0, st.replies or 0,
+      st.lastReplyFrom and (", last by " .. st.lastReplyFrom) or ""))
     local eds = NS.Editors()
     if #eds > 0 then print("|cff" .. NS.GOLD .. "Book of Dogs|r editors: " .. table.concat(eds, ", ")) end
   else
