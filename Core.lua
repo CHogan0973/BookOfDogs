@@ -168,14 +168,14 @@ local function firstId(id) local nm, realm = id:match("^(%S+).-%-(.*)$"); return
 ------------------------------------------------------------------------
 -- guild membership and ranks
 ------------------------------------------------------------------------
+-- The guild is known by its name alone. Forever is a realmless world: the realm the
+-- game reports can be blank or change, and keying the guild on it made the addon
+-- think you'd left the guild (an empty Book that never synced).
 local function currentGuild()
   if not IsInGuild() then return end
-  local name, _, _, realm = GetGuildInfo("player")
-  if (issecretvalue and (issecretvalue(name) or issecretvalue(realm))) or not name or name == "" then return end
-  realm = realm and realm:gsub("[%s%-]", "") or ""
-  if realm == "" then realm = NS.MyRealm() end
-  if realm == "" then return end -- realm not known yet; try again on the next event
-  return realm:lower() .. ":" .. name:lower(), name
+  local name = GetGuildInfo("player")
+  if (issecretvalue and issecretvalue(name)) or type(name) ~= "string" or name == "" then return end
+  return name:lower(), name
 end
 
 function NS.InGuildFeed()
@@ -903,11 +903,21 @@ local function refreshFeed()
     local guilds = BookOfDogsDB.feeds
     profile = guilds[key] or {seed = DEFAULT_FEED, books = {}}
     guilds[key] = profile
+    -- earlier versions keyed guilds as "realm:name": fold those into this one
+    for k, old in pairs(guilds) do
+      if k ~= key and k:match(":(.*)$") == key and type(old) == "table" then
+        for seed, book in pairs(old.books or {}) do
+          profile.books[seed] = profile.books[seed] or {}
+          mergeBook(book, profile.books[seed])
+        end
+        guilds[k] = nil
+      end
+    end
     foldCustomFeeds(profile, name:lower() == LEGACY_GUILD)
     if name:lower() == LEGACY_GUILD then
       -- fold anything left in an old separate Dog book back into the main one
       for k, p in pairs(guilds) do
-        if k:match(":(.*)$") == LEGACY_GUILD and p.books and p.books[DEFAULT_FEED] then adoptOrphan(k) end
+        if (k == LEGACY_GUILD or k:match(":(.*)$") == LEGACY_GUILD) and p.books and p.books[DEFAULT_FEED] then adoptOrphan(k) end
       end
       if isBlankKey(BookOfDogsDB.legacyGuild) then guilds[BookOfDogsDB.legacyGuild] = nil end
       if BookOfDogsDB.legacyGuild ~= key then relatch(key) end
@@ -944,6 +954,16 @@ local function refreshFeed()
   return true
 end
 
+-- guild info can arrive late (or the events that carry it can be missed): until the
+-- guild the game reports matches the active book, check again every few seconds
+local function guildWatch()
+  if C_Timer and C_Timer.NewTicker then
+    C_Timer.NewTicker(5, function()
+      if BookOfDogsDB and BookOfDogsDB.feeds and currentGuild() ~= activeGuild then refreshFeed() end
+    end)
+  end
+end
+
 local f = CreateFrame("Frame")
 f:RegisterEvent("ADDON_LOADED")
 f:RegisterEvent("PLAYER_LOGIN")
@@ -957,6 +977,7 @@ f:SetScript("OnEvent", function(_, event, arg)
   elseif event == "PLAYER_LOGIN" then
     refreshFeed()
     loggedIn = true
+    guildWatch()
     if NS.InGuildFeed() then NS.LearnName(NS.MyFull() .. "-" .. NS.MyRealm()) end
     if C_GuildInfo and C_GuildInfo.GuildRoster then C_GuildInfo.GuildRoster() elseif GuildRoster then GuildRoster() end
     if NS.CommStart then NS.CommStart() end
