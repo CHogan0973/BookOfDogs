@@ -203,7 +203,7 @@ handlers.A = function(sender, id, t, m, n, g, a, d, f, ed, class, tag)
   if not canEdit then
     local now, r = GetTime(), recent[sender] or {}
     local keep = {} for _, ts in ipairs(r) do if now - ts < 60 then keep[#keep + 1] = ts end end
-    if #keep >= 6 then return end
+    if #keep >= 6 then NS.rejects["too many at once (not a sync reply)"] = (NS.rejects["too many at once (not a sync reply)"] or 0) + 1; return end
     keep[#keep + 1] = now; recent[sender] = keep
     a = NS.senderDisplay or sender
     -- Guild chat can create the entry before the queued addon message arrives.
@@ -211,7 +211,9 @@ handlers.A = function(sender, id, t, m, n, g, a, d, f, ed, class, tag)
     canFillClass = e and NS.Id(e.a) == sender and e.t == tonumber(t)
                    and (e.n == NS.Clean(n, 60) or e.n == NS.Clean(f, 40))
   end
-  NS.ApplyEntry(id, t, m, n, g, a, d, f, canEdit, ed, class, canFillClass, tag)
+  if NS.ApplyEntry(id, t, m, n, g, a, d, f, canEdit, ed, class, canFillClass, tag) then
+    NS.stats.applied = (NS.stats.applied or 0) + 1
+  end
 end
 -- editor granted/removed: only the main admin can do this
 handlers.G = function(sender, name, v, m)
@@ -364,7 +366,11 @@ frame:SetScript("OnEvent", function(_, _, prefix, msg, channel, sender)
   buffers[sender] = nil
   if feed ~= "" and #body > 4096 then return end
   local ok, err = pcall(handle, sender, body)
-  if not ok and BookOfDogsDB and BookOfDogsDB.debug then print("Book of Dogs:", err) end
+  if not ok then
+    NS.stats.errors = (NS.stats.errors or 0) + 1
+    NS.stats.lastError = tostring(err):sub(1, 160)
+    if BookOfDogsDB and BookOfDogsDB.debug then print("Book of Dogs:", err) end
+  end
 end)
 
 -- fallback: pick up new entries from the guild chat announcement

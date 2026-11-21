@@ -52,8 +52,17 @@ local function refresh()
         msg = ("This character's copy is empty.\nAsked %d time(s), but no Book of Dogs messages have arrived yet.\n" ..
                "A guildmate with the addon needs to be online. It keeps asking on its own, or click Sync."):format(st.asked)
       else
-        msg = ("This character's copy is empty.\nAsked %d time(s); %d message(s) received%s.\nThe book should fill in shortly. If not, click Sync."):format(
+        local rj = {}
+        for why, c in pairs(NS.rejects or {}) do rj[#rj + 1] = why .. " x" .. c end
+        msg = ("This character's copy is empty.\nAsked %d time(s); %d message(s) received%s.\n"):format(
           st.asked, st.recv, st.lastReplyFrom and (", answered by " .. st.lastReplyFrom) or "")
+        if #rj > 0 or (st.errors or 0) > 0 then
+          msg = msg .. "|cffff8080Entries turned away: " .. (#rj > 0 and table.concat(rj, ", ") or "none") ..
+                ((st.errors or 0) > 0 and ("\nErrors: " .. st.errors .. " (" .. tostring(st.lastError) .. ")") or "") ..
+                "|r\nPlease send a screenshot of this to CHogan."
+        else
+          msg = msg .. "The book should fill in shortly. If not, click Sync."
+        end
       end
       frame.empty:SetText(msg); frame.empty:Show()
     end

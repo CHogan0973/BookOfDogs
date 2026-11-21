@@ -178,8 +178,13 @@ local function currentGuild()
   return name:lower(), name
 end
 
+-- Still in the active guild's book? A moment where the game can't say which guild
+-- you're in (loading screens, zoning) doesn't count as leaving it.
 function NS.InGuildFeed()
-  return activeGuild ~= nil and activeGuild == currentGuild()
+  if activeGuild == nil then return false end
+  local key = currentGuild()
+  if key == nil then return IsInGuild() and true or false end
+  return key == activeGuild
 end
 
 -- Any guild named Dog reads and writes the original book (no per-realm pinning, so
@@ -394,8 +399,11 @@ function NS.ValidId(id) return type(id) == "string" and #id <= 12 and id:match("
 -- ed: who last edited it
 -- canFillClass: a live announcement from the author can fill a missing class (and tag)
 -- tag: a tag key, "" for no tag, or nil when the sender didn't say (older versions)
+-- why received entries were turned away (shown by /dogs status, for troubleshooting)
+NS.rejects = {}
+local function reject(why) NS.rejects[why] = (NS.rejects[why] or 0) + 1; return false end
 function NS.ApplyEntry(id, t, m, n, g, a, d, f, canEdit, ed, class, canFillClass, tag)
-  if not NS.InGuildFeed() then return false end
+  if not NS.InGuildFeed() then return reject("not in guild") end
   t, m = tonumber(t) or 0, tonumber(m) or 0
   ed = ed and NS.Clean(ed, 60) or ""
   if (issecretvalue and issecretvalue(class)) or type(class) ~= "string"
@@ -406,16 +414,16 @@ function NS.ApplyEntry(id, t, m, n, g, a, d, f, canEdit, ed, class, canFillClass
     tag = NS.ParseTags(tag)
     if tag == "" then tag = nil end
   end
-  if not NS.ValidId(id) then return false end
+  if not NS.ValidId(id) then return reject("bad id") end
   -- everything from the network is cleaned and length-capped before it is stored or shown
   n, g, a, f = NS.Clean(n, 60), NS.Clean(g, 40), NS.Clean(a, 60), NS.Clean(f, 40)
   d = cleanDescription(d)
-  if n == "" or not d or d == "" then return false end
-  if NS.Blocked(f) or NS.Blocked(n) or NS.Blocked(g) or NS.Blocked(a) or NS.Blocked(ed) then return false end
-  if NS.IsGuildmate(n, g) then return false end -- guildmates can't be added
+  if n == "" or not d or d == "" then return reject("empty name/note or blocked word in note") end
+  if NS.Blocked(f) or NS.Blocked(n) or NS.Blocked(g) or NS.Blocked(a) or NS.Blocked(ed) then return reject("blocked word") end
+  if NS.IsGuildmate(n, g) then return reject("counted as a guildmate") end -- guildmates can't be added
   local e = db.e[id]
   if e then
-    if e.x then return false end -- deleted stays deleted
+    if e.x then return reject("deleted earlier") end -- deleted stays deleted
     if not canEdit or m <= (e.m or 0) then
       -- A sync reply may predate a local edit or vote. Keep that newer data.
       local filled
@@ -898,6 +906,9 @@ end
 
 local function refreshFeed()
   local key, name = currentGuild()
+  -- in a guild, but the game can't name it right now: keep the current book rather
+  -- than dropping it (and resetting sync) for a moment
+  if not key and activeGuild and IsInGuild() then return end
   local profile
   if key then
     local guilds = BookOfDogsDB.feeds
@@ -959,7 +970,9 @@ end
 local function guildWatch()
   if C_Timer and C_Timer.NewTicker then
     C_Timer.NewTicker(5, function()
-      if BookOfDogsDB and BookOfDogsDB.feeds and currentGuild() ~= activeGuild then refreshFeed() end
+      if not (BookOfDogsDB and BookOfDogsDB.feeds) then return end
+      local key = currentGuild()
+      if (key and key ~= activeGuild) or (not key and activeGuild and not IsInGuild()) then refreshFeed() end
     end)
   end
 end
@@ -1029,6 +1042,11 @@ SlashCmdList.BOOKOFDOGS = function(msg)
       NS.GOLD, st.sent or 0, st.failed or 0, tostring(st.lastRes), st.queued or 0, st.recv or 0, st.chat or 0, r1, r2))
     print(("|cff%sBook of Dogs|r sync: asked %d time(s), answered %d time(s)%s."):format(NS.GOLD, st.asked or 0, st.replies or 0,
       st.lastReplyFrom and (", last by " .. st.lastReplyFrom) or ""))
+    local rj, nrej = {}, 0
+    for why, c in pairs(NS.rejects or {}) do rj[#rj + 1] = why .. " x" .. c; nrej = nrej + c end
+    print(("|cff%sBook of Dogs|r entries received: %d stored, %d turned away%s. Errors: %d%s"):format(NS.GOLD,
+      st.applied or 0, nrej, #rj > 0 and (" (" .. table.concat(rj, ", ") .. ")") or "",
+      st.errors or 0, st.lastError and (" (last: " .. st.lastError .. ")") or ""))
     local eds = NS.Editors()
     if #eds > 0 then print("|cff" .. NS.GOLD .. "Book of Dogs|r editors: " .. table.concat(eds, ", ")) end
   else
