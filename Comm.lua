@@ -423,7 +423,31 @@ function NS.CommFeedChanged()
   end)
 end
 
+-- Catching up on anything missed live. Inside instances the game can hold back addon
+-- messages and hide chat from addons, so a new entry added while you're in a dungeon
+-- can be missed: ask again when you leave the instance, and quietly every 10 minutes.
+-- A check is one short message; a guildmate answers only if your book is behind theirs.
+local wasInInstance
+local catchup = CreateFrame("Frame")
+catchup:RegisterEvent("PLAYER_ENTERING_WORLD")
+catchup:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+catchup:SetScript("OnEvent", function()
+  local inInst = IsInInstance and IsInInstance()
+  if wasInInstance and not inInst then
+    C_Timer.After(5, function() if NS.InGuildFeed() then NS.RequestSync(false) end end)
+  end
+  wasInInstance = inInst and true or false
+end)
+local catchupTicker
+local function startCatchup()
+  if catchupTicker or not (C_Timer and C_Timer.NewTicker) then return end
+  catchupTicker = C_Timer.NewTicker(600, function()
+    if NS.InGuildFeed() and not (IsInInstance and IsInInstance()) then NS.RequestSync(false) end
+  end)
+end
+
 function NS.CommStart()
   if C_ChatInfo.RegisterAddonMessagePrefix then C_ChatInfo.RegisterAddonMessagePrefix(PREFIX) end
   NS.CommFeedChanged()
+  startCatchup()
 end
